@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/search",
+    "description": "Site-wide search across enabled modules.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Search"
+    }
+}
