@@ -12,6 +12,7 @@ use System\Engine\Controller;
 use System\Engine\NotFoundException;
 use System\Library\HtmlCleaner;
 use System\Library\Paginator;
+use System\Library\Dataset;
 
 class NewsAdminArticles extends Controller
 {
@@ -39,141 +40,227 @@ class NewsAdminArticles extends Controller
 
     public function indexAction(): void
     {
-        $page    = max(1, (int) $this->request->get('page', 'int', 1));
-        $perPage = 15;
-        $offset  = ($page - 1) * $perPage;
-
-        $filters = [
-            'q'           => trim((string) $this->request->get('q', 'string', '')),
-            'status'      => trim((string) $this->request->get('status', 'string', '')),
-            'category_id' => (int) $this->request->get('category', 'int', 0),
-        ];
-
-        $items      = $this->news->search($filters, $perPage, $offset);
-        $total      = $this->news->countSearch($filters);
         $categories = $this->categories->all();
-        $pager      = Paginator::make($total, $page, $perPage);
 
-        echo $this->view->inline(function () use ($items, $total, $pager, $filters, $categories) {
+        $categoryOptions = ['0' => 'All categories'];
+
+        foreach ($categories as $category) {
+            $categoryOptions[(string) $category->id] = $category->name;
+        }
+
+        $dataset = (new Dataset($this->registry))
+            ->perPage(15)
+            ->searchPlaceholder('Search title, slug or excerpt...')
+            ->sortable([
+                'title',
+                'category_name',
+                'status',
+                'published_at',
+                'created_at',
+            ])
+            ->defaultSort('created_at', 'desc')
+            ->filter('status', 'select', [
+                ''          => 'All statuses',
+                'draft'     => 'Draft',
+                'published' => 'Published',
+                'scheduled' => 'Scheduled',
+                'archived'  => 'Archived',
+            ])
+            ->filter('category', 'select', $categoryOptions)
+            ->columns([
+                'select' => '',
+                'title' => 'Title',
+                'category_name' => 'Category',
+                'status' => 'Status',
+                'published_at' => 'Published',
+                'actions' => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $filters = [
+                    'q' => $state['q'],
+                    'status' => $state['filters']['status'] ?? '',
+                    'category_id' => (int) ($state['filters']['category'] ?? 0),
+                ];
+
+                $items = $this->news->search(
+                    $filters,
+                    $state['per_page'],
+                    $state['offset'],
+                    $state['sort'],
+                    $state['dir']
+                );
+
+                $total = $this->news->countSearch($filters);
+
+                return [
+                    'rows' => array_map(
+                        static fn(News $item): array => ['_news' => $item],
+                        $items
+                    ),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string =>
+            $this->view->e((string) $value);
+
+        $dataset->columns([
+            'select' => function (array $row): string {
+                $item = $row['_news'];
+
+                return '<input form="news-bulk" type="checkbox" '
+                    . 'class="form-check-input news-bulk-id" '
+                    . 'name="ids[]" value="' . (int) $item->id . '" '
+                    . 'autocomplete="off">';
+            },
+
+            'title' => function (array $row) use ($e): string {
+                $item = $row['_news'];
+
+                $html = '<a class="sf-title" href="'
+                    . $e($this->url->to('news/admin/articles/edit', [
+                        'id' => $item->id,
+                    ]))
+                    . '" title="' . $e($item->title) . '">'
+                    . $e($item->title) . '</a>';
+
+                if ($item->featured) {
+                    $html .= ' <span class="sf-pill is-pin">Featured</span>';
+                }
+
+                $html .= '<span class="sf-sub">'
+                    . $e($item->slug);
+
+                if ($item->authorLabel() !== '') {
+                    $html .= ' · ' . $e($item->authorLabel());
+                }
+
+                return $html . '</span>';
+            },
+
+            'category_name' => function (array $row) use ($e): string {
+                return $e($row['_news']->categoryName ?? '—');
+            },
+
+            'status' => function (array $row): string {
+                return $this->statusBadge($row['_news']);
+            },
+
+            'published_at' => function (array $row) use ($e): string {
+                return $e($this->formatWhen(
+                    $row['_news']->publishedAt ?? null
+                ));
+            },
+
+            'actions' => function (array $row) use ($e): string {
+                $item = $row['_news'];
+
+                $html = '<div class="sf-row-acts">';
+
+                if ($item->isPublished()) {
+                    $url = $this->url->to('news/view', [
+                        'slug' => $item->slug,
+                    ]);
+                    $label = 'View';
+                } else {
+                    $url = $this->previewUrl($item);
+                    $label = 'Preview';
+                }
+
+                $html .= '<a href="' . $e($url) . '" class="sf-btn" '
+                    . 'target="_blank" rel="noopener">'
+                    . $label . '</a>';
+
+                $html .= '<a href="' . $e($this->url->to(
+                    'news/admin/articles/edit',
+                    ['id' => $item->id]
+                )) . '" class="sf-btn">Edit</a>';
+
+                $html .= '<form method="post" action="'
+                    . $e($this->url->to('news/admin/articles/delete'))
+                    . '" onsubmit="return confirm(\'Delete this article?\');">';
+
+                $html .= $this->request->csrfField();
+
+                $html .= '<input type="hidden" name="id" value="'
+                    . (int) $item->id . '">';
+
+                $html .= '<button type="submit" class="sf-btn is-danger">'
+                    . 'Delete</button></form>';
+
+                return $html . '</div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $categories, $e) {
             $this->view->assign('title', 'News articles');
             $this->view->block('right_sidebar', 'News');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
-            $filtered = $filters['q'] !== '' || $filters['status'] !== '' || $filters['category_id'] > 0;
 
             echo '<div class="sf-page">';
+
             echo '<div class="sf-head">';
-            echo '<div><h1>Articles</h1><p>Create, publish and manage news articles.</p></div>';
+            echo '<div><h1>Articles</h1>'
+                . '<p>Create, publish and manage news articles.</p></div>';
+
             echo '<div class="sf-actions">';
-            echo '<a href="' . $e($this->url->to('news')) . '" class="sf-btn" target="_blank" rel="noopener">'
-               . '<i class="bi bi-box-arrow-up-right"></i>View site</a>';
-            echo '<a href="' . $e($this->url->to('news/admin/articles/add')) . '" class="sf-btn is-primary">'
-               . '<i class="bi bi-plus-lg"></i>New article</a>';
+
+            echo '<a href="' . $e($this->url->to('news'))
+                . '" class="sf-btn" target="_blank" rel="noopener">'
+                . '<i class="bi bi-box-arrow-up-right"></i>View site</a>';
+
+            echo '<a href="' . $e($this->url->to('news/admin/articles/add'))
+                . '" class="sf-btn is-primary">'
+                . '<i class="bi bi-plus-lg"></i>New article</a>';
+
             echo '</div></div>';
 
             echo '<section class="sf-card">';
-            echo '<form method="get" action="' . $e($this->url->to('news/admin/articles')) . '" class="sf-filters">';
-            echo '<label>Search<input type="search" name="q" value="' . $e($filters['q'])
-               . '" placeholder="Title, slug, excerpt…"></label>';
-            echo '<label>Status<select name="status">';
-            foreach (['' => 'All statuses', 'draft' => 'Draft', 'published' => 'Published', 'scheduled' => 'Scheduled', 'archived' => 'Archived'] as $val => $label) {
-                $sel = $filters['status'] === $val ? ' selected' : '';
-                echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
-            }
-            echo '</select></label>';
-            echo '<label>Category<select name="category"><option value="0">All categories</option>';
-            foreach ($categories as $c) {
-                $sel = (int) $filters['category_id'] === (int) $c->id ? ' selected' : '';
-                echo '<option value="' . (int) $c->id . '"' . $sel . '>' . $e($c->name) . '</option>';
-            }
-            echo '</select></label>';
-            echo '<button type="submit" class="sf-btn">Apply</button>';
-            echo $filtered
-                ? '<a class="sf-btn" href="' . $e($this->url->to('news/admin/articles')) . '">Reset</a>'
-                : '<span></span>';
-            echo '</form>';
-
-            echo '<div class="sf-card-h"><h2>' . (int) $total . ' article'
-               . ((int) $total === 1 ? '' : 's') . '</h2></div>';
-
-            if ($items === []) {
-                echo '<p class="sf-empty">'
-                   . ($filtered ? 'No articles match these filters.' : 'No articles yet. ')
-                   . ($filtered ? '' : '<a href="' . $e($this->url->to('news/admin/articles/add')) . '">Create the first one</a>.')
-                   . '</p></section></div>';
-                return;
-            }
 
             echo '<form id="news-bulk" method="post" action="'
-               . $e($this->url->to('news/admin/articles/bulk'))
-               . '" class="sf-bulk" autocomplete="off">';
+                . $e($this->url->to('news/admin/articles/bulk'))
+                . '" class="sf-bulk" autocomplete="off">';
+
             echo $this->request->csrfField();
-            echo '<label class="sf-bulk__all"><input type="checkbox" class="form-check-input" id="news-bulk-all">'
-               . 'Select all</label>';
-            echo '<label class="sf-bulk__action">Action<select name="action" id="news-bulk-action">';
+
+            echo '<label class="sf-bulk__all">'
+                . '<input type="checkbox" class="form-check-input" '
+                . 'id="news-bulk-all">Select all</label>';
+
+            echo '<label class="sf-bulk__action">Action'
+                . '<select name="action" id="news-bulk-action">';
+
             echo '<option value="">Choose action…</option>';
             echo '<option value="publish">Publish</option>';
             echo '<option value="draft">Move to draft</option>';
             echo '<option value="archive">Archive</option>';
             echo '<option value="category">Set category</option>';
             echo '<option value="delete">Delete</option>';
+
             echo '</select></label>';
-            echo '<label class="sf-bulk__cat d-none" id="news-bulk-cat-wrap">Category<select name="category_id">';
+
+            echo '<label class="sf-bulk__cat d-none" '
+                . 'id="news-bulk-cat-wrap">Category<select name="category_id">';
+
             echo '<option value="0">— None —</option>';
-            foreach ($categories as $c) {
-                echo '<option value="' . (int) $c->id . '">' . $e($c->name) . '</option>';
+
+            foreach ($categories as $category) {
+                echo '<option value="' . (int) $category->id . '">'
+                    . $e($category->name) . '</option>';
             }
+
             echo '</select></label>';
-            echo '<button type="submit" class="sf-btn" id="news-bulk-apply" disabled>Apply</button>';
-            echo '<span class="sf-bulk__count" id="news-bulk-count">0 selected</span>';
+
+            echo '<button type="submit" class="sf-btn" '
+                . 'id="news-bulk-apply" disabled>Apply</button>';
+
+            echo '<span class="sf-bulk__count" '
+                . 'id="news-bulk-count">0 selected</span>';
+
             echo '</form>';
 
-            echo '<div class="table-responsive"><table class="sf-table">';
-            echo '<thead><tr><th class="c-check"></th>'
-               . '<th>Title</th><th class="c-cat">Category</th>'
-               . '<th class="c-status">Status</th><th class="c-when">Published</th>'
-               . '<th class="c-acts"></th></tr></thead><tbody>';
+            echo $dataset->render();
 
-            foreach ($items as $n) {
-                echo '<tr>';
-                echo '<td class="c-check"><input form="news-bulk" type="checkbox" class="form-check-input news-bulk-id"'
-                   . ' name="ids[]" value="' . (int) $n->id . '" autocomplete="off"></td>';
-                echo '<td><a class="sf-title" href="'
-                   . $e($this->url->to('news/admin/articles/edit', ['id' => $n->id]))
-                   . '" title="' . $e($n->title) . '">' . $e($n->title) . '</a>'
-                   . ($n->featured ? ' <span class="sf-pill is-pin">Featured</span>' : '')
-                   . '<span class="sf-sub">' . $e($n->slug)
-                   . ($n->authorLabel() !== '' ? ' · ' . $e($n->authorLabel()) : '')
-                   . '</span></td>';
-                echo '<td class="c-cat">' . $e($n->categoryName ?? '—') . '</td>';
-                echo '<td class="c-status">' . $this->statusBadge($n) . '</td>';
-                echo '<td class="c-when sf-when">' . $e($this->formatWhen($n->publishedAt ?? null)) . '</td>';
-                echo '<td class="c-acts"><div class="sf-row-acts">';
-                if ($n->isPublished()) {
-                    echo '<a href="' . $e($this->url->to('news/view', ['slug' => $n->slug])) . '"'
-                       . ' class="sf-btn" target="_blank" rel="noopener">View</a>';
-                } else {
-                    echo '<a href="' . $e($this->previewUrl($n)) . '"'
-                       . ' class="sf-btn" target="_blank" rel="noopener">Preview</a>';
-                }
-                echo '<a href="' . $e($this->url->to('news/admin/articles/edit', ['id' => $n->id])) . '"'
-                   . ' class="sf-btn">Edit</a>';
-                echo '<form method="post" action="' . $e($this->url->to('news/admin/articles/delete')) . '"'
-                   . ' onsubmit="return confirm(\'Delete this article?\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="id" value="' . (int) $n->id . '">';
-                echo '<button type="submit" class="sf-btn is-danger">Delete</button>';
-                echo '</form></div></td></tr>';
-            }
-
-            echo '</tbody></table></div>';
             echo $this->bulkScript();
-
-            $base = array_filter([
-                'q'        => $filters['q'],
-                'status'   => $filters['status'],
-                'category' => $filters['category_id'] > 0 ? $filters['category_id'] : null,
-            ], static fn($v) => $v !== null && $v !== '' && $v !== 0);
-            echo $this->listPager($pager, $base);
 
             echo '</section></div>';
         });

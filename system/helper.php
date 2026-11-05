@@ -134,6 +134,11 @@ function registry(?string $name = null, mixed $value = null): mixed
     return $value;
 }
 
+function url(?string $route = null, array $params = [], bool $absolute = false, bool $seo = false): string
+{
+    return registry('url')->to($route, $params, $absolute, $seo);
+}
+
 /**
  * Console command registry.
  *

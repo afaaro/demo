@@ -102,8 +102,9 @@ class Dataset
 
     public function query(callable $callback): self
     {
-        $this->reset();
+        $this->table = '';
         $this->queryCallback = $callback;
+
         return $this;
     }
 
@@ -159,8 +160,11 @@ class Dataset
     {
         $request = $this->registry->get('request');
 
-        $q = trim((string) $request->get('q', 'string', ''));
-        $sort = trim((string) $request->get('sort', 'string', $this->defaultSort));
+        // Listing controls come from the query string only.
+        $q = trim((string) $request->query('q', 'string', ''));
+
+        $sort = trim((string) $request->query('sort', 'string', $this->defaultSort));
+
         if ($this->sortable !== [] && !in_array($sort, $this->sortable, true)) {
             $sort = in_array($this->defaultSort, $this->sortable, true)
                 ? $this->defaultSort
@@ -169,39 +173,50 @@ class Dataset
             $sort = $this->defaultSort;
         }
 
-        $dir = strtolower((string) $request->get('dir', 'string', $this->defaultDir));
+        $dir = strtolower((string) $request->query('dir', 'string', $this->defaultDir));
         $dir = $dir === 'asc' ? 'asc' : 'desc';
 
-        $page = max(1, (int) $request->get('page', 'int', 1));
-        $perPage = (int) $request->get('per_page', 'int', $this->perPage);
+        $page = max(1, (int) $request->query('page', 'int', 1));
+
+        $perPage = (int) $request->query('per_page', 'int', $this->perPage);
         $perPage = max(1, min(100, $perPage > 0 ? $perPage : $this->perPage));
 
         $filters = [];
+
         foreach ($this->filters as $name => $def) {
-            $value = trim((string) $request->get($name, 'string', ''));
+            $value = trim((string) $request->query($name, 'string', ''));
+
             if ($value === '') {
                 continue;
             }
+
             if ($def['type'] === 'select' && $def['options'] !== []) {
                 $allowed = array_map('strval', array_keys($def['options']));
+
                 if (!in_array($value, $allowed, true)) {
                     continue;
                 }
             }
+
             $filters[$name] = $value;
         }
 
         $columns = [];
-        $rawColumns = $request->get('c', 'raw', []);
+        $rawColumns = $request->query('c', 'raw', []);
+
         if (!is_array($rawColumns)) {
             $rawColumns = [];
         }
+
         foreach ($this->searchable as $column) {
             $value = $rawColumns[$column] ?? '';
+
             if (!is_string($value) && !is_numeric($value)) {
                 continue;
             }
+
             $value = trim((string) $value);
+
             if ($value !== '') {
                 $columns[$column] = $value;
             }

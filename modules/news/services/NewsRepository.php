@@ -52,19 +52,37 @@ final class NewsRepository
      * @param array{q?:string,status?:string,category_id?:int} $filters
      * @return array<int, News>
      */
-    public function search(array $filters, int $limit = 100, int $offset = 0): array
-    {
+    public function search(
+        array $filters,
+        int $limit = 100,
+        int $offset = 0,
+        string $sort = 'created_at',
+        string $dir = 'desc'
+    ): array {
         [$where, $params] = $this->buildSearchWhere($filters);
+
+        $allowedSorts = [
+            'id'            => 'n.`id`',
+            'title'         => 'n.`title`',
+            'slug'          => 'n.`slug`',
+            'status'        => 'n.`status`',
+            'published_at'  => 'n.`published_at`',
+            'created_at'    => 'n.`created_at`',
+            'category_name' => 'c.`name`',
+        ];
+
+        $sortSql = $allowedSorts[$sort] ?? $allowedSorts['created_at'];
+        $direction = strtolower($dir) === 'asc' ? 'ASC' : 'DESC';
 
         $rows = $this->db->query(
             $this->articleSelect() . "
-              {$where}
-              ORDER BY n.`created_at` DESC, n.`id` DESC
-              LIMIT ? OFFSET ?",
+                {$where}
+                ORDER BY {$sortSql} {$direction}, n.`id` DESC
+                LIMIT ? OFFSET ?",
             array_merge($params, [$limit, $offset])
         )->rows;
 
-        return array_map(fn($r) => $this->hydrate($r), $rows);
+        return array_map(fn($row) => $this->hydrate($row), $rows);
     }
 
     /** @param array{q?:string,status?:string,category_id?:int} $filters */
