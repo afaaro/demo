@@ -4,3 +4,4 @@ storage/*
 *.sql
 system/config/storefeeder.php
 system/config/captcha.php
+system/config/database.php
