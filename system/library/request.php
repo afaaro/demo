@@ -419,9 +419,6 @@ class Request
     public function setRouteParams(array $params): void
     {
         $this->routeParams = $params;
-        foreach ($params as $key => $value) {
-            $this->get[$key] = $value;
-        }
     }
 
     public function setMatchedRoute(object $route): void
