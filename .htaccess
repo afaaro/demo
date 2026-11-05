@@ -1,7 +1,7 @@
 <IfModule mod_rewrite.c>
     Options +FollowSymLinks -MultiViews
     RewriteEngine On
-    RewriteBase /
+    # RewriteBase /demo/
 
     ## Begin - Exploits
     RewriteCond %{QUERY_STRING} base64_encode[^(]*\([^)]*\) [OR]

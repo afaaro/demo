@@ -1,6 +1,6 @@
 vendor/
-uploads/
-storage/
+uploads/*
+storage/*
 *.sql
 system/config/storefeeder.php
 system/config/captcha.php
