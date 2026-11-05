@@ -1,0 +1,29 @@
+[
+  {
+    "name": "orders_per_page",
+    "type": "number",
+    "label": "Orders per page",
+    "description": "Default page size on the Orders list (overrides can still use query params).",
+    "default": 50,
+    "min": 10,
+    "max": 200,
+    "step": 10
+  },
+  {
+    "name": "default_sync_days",
+    "type": "number",
+    "label": "Default order sync window (days)",
+    "description": "Default lookback when pulling orders from channels.",
+    "default": 30,
+    "min": 1,
+    "max": 365,
+    "step": 1
+  },
+  {
+    "name": "show_pull_toolbar",
+    "type": "checkbox",
+    "label": "Show channel pull toolbar on Orders",
+    "description": "Display the Pull from channels controls above the orders list.",
+    "default": true
+  }
+]

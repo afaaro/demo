@@ -1,0 +1,19 @@
+[
+  {
+    "name": "posts_per_page",
+    "type": "number",
+    "label": "Posts per page",
+    "description": "Default number of news items listed per page.",
+    "default": 10,
+    "min": 1,
+    "max": 100,
+    "step": 1
+  },
+  {
+    "name": "allow_comments",
+    "type": "checkbox",
+    "label": "Allow comments",
+    "description": "Enable comments on news articles when supported by the theme.",
+    "default": false
+  }
+]

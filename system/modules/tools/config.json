@@ -1,0 +1,9 @@
+[
+  {
+    "name": "show_system_modules",
+    "type": "checkbox",
+    "label": "Show system modules in list",
+    "description": "When off, Tools and User are hidden from the Module Management table (they stay installed).",
+    "default": true
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "registration_open",
+    "type": "checkbox",
+    "label": "Public registration open",
+    "description": "Allow visitors to create accounts. When off, only admins can add users.",
+    "default": true
+  },
+  {
+    "name": "min_form_seconds",
+    "type": "number",
+    "label": "Minimum form fill time (seconds)",
+    "description": "Anti-bot delay before a registration can be submitted.",
+    "default": 5,
+    "min": 3,
+    "max": 60,
+    "step": 1
+  },
+  {
+    "name": "default_group",
+    "type": "text",
+    "label": "Default registration group",
+    "description": "Group name assigned to new public signups (must exist in Groups).",
+    "default": "users"
+  }
+]
