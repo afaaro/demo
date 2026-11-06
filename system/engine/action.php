@@ -154,7 +154,7 @@ class Action
         }
 
         // 4. Method check (FIX #new)
-        $method = strtoupper((string) $request->get('method', 'string', $_SERVER['REQUEST_METHOD'] ?? 'GET'));
+        $method = $request->method();
         if (!$route->allowsMethod($method)) {
             throw new MethodNotAllowedException(
                 "Method {$method} not allowed for '{$uri}'."
@@ -587,12 +587,13 @@ class Action
     private function recordPageAccess(Route $route): void
     {
         try {
-            $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+            $request = $this->registry->get('request');
+
+            $method = $request->method();
             if ($method !== 'GET' && $method !== 'HEAD') {
                 return;
             }
 
-            $request = $this->registry->get('request');
             $auth = $this->registry->get('auth');
             $db = $this->registry->get('db');
 
