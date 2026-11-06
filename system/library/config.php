@@ -15,10 +15,32 @@ final class Config
 
     private string $basePath;
 
-    public function __construct(?string $basePath = null)
+    /**
+     * Module directories.
+     *
+     * Supports:
+     * modules/<module>/config/
+     * system/modules/<module>/config/
+     */
+    protected array $modulePaths = [];
+
+    public function __construct(?string $basePath = null, ?array $modulePaths = null)
     {
         $basePath = $basePath ?? (defined('BASEDIR') ? BASEDIR . 'system/config/' : '');
         $this->basePath = $this->normalizeBasePath($basePath);
+
+        $root = defined('BASEDIR') ? BASEDIR : './';
+
+        $this->modulePaths = $modulePaths ?? [
+            $root . 'modules/',
+            $root . 'system/modules/',
+        ];
+
+
+        $this->modulePaths = array_map(
+            fn($path) => $this->normalizeBasePath($path),
+            $this->modulePaths
+        );
 
         if ($this->basePath !== '' && !is_dir($this->basePath)) {
             throw new RuntimeException("Config directory does not exist: {$this->basePath}");
@@ -236,6 +258,116 @@ final class Config
 
             self::$loaded[$cacheKey] = ['path' => $filePath, 'data' => $data];
         }
+
+        return [$cacheKey, $subKey];
+    }
+
+    /**
+     * Get a module configuration value.
+     *
+     * Examples:
+     * getModule('storefeeder', 'ebay.client_id')
+     * getModule('news', 'settings.per_page', 10)
+     */
+    public function getModule(
+        string $module,
+        string $key,
+        $default = null
+    ) {
+        [$cacheKey, $subKey] = $this->resolveModuleFilePath(
+            $module,
+            $key
+        );
+
+        return $this->getValue(
+            $cacheKey,
+            $subKey,
+            $default,
+            $module . '.' . $key
+        );
+    }
+
+    /**
+     * Retrieve a value from a loaded configuration file.
+     */
+    protected function getValue(
+        string $cacheKey,
+        ?string $subKey,
+        $default,
+        string $castKey
+    ) {
+        $config = $this->loaded[$cacheKey]['data'];
+
+        if ($subKey === null) {
+            return $config;
+        }
+
+        $value = $config;
+
+        foreach (explode('.', $subKey) as $segment) {
+            if (
+                !is_array($value) ||
+                !array_key_exists($segment, $value)
+            ) {
+                return $default;
+            }
+
+            $value = $value[$segment];
+        }
+
+        return $this->castValue($castKey, $value);
+    }
+
+    /**
+     * Find a module configuration file.
+     *
+     * Example:
+     * modules/storefeeder/config/ebay.php
+     */
+    protected function resolveModuleFilePath(
+        string $module,
+        string $key
+    ): array {
+        $this->validateName($module);
+
+        $parts = explode('.', $key, 2);
+
+        $fileKey = $parts[0];
+        $subKey = $parts[1] ?? null;
+
+        $this->validateName($fileKey);
+
+        $filePath = null;
+        $moduleDirectory = null;
+
+        foreach ($this->modulePaths as $modulePath) {
+            $candidateDirectory = $modulePath . $module . '/';
+            $candidateFile = $candidateDirectory . 'config/' . $fileKey . '.php';
+
+            if (is_file($candidateFile)) {
+                $moduleDirectory = $candidateDirectory;
+                $filePath = $candidateFile;
+                break;
+            }
+
+            // Remember an existing module directory for new config files.
+            if ($moduleDirectory === null && is_dir($candidateDirectory)) {
+                $moduleDirectory = $candidateDirectory;
+            }
+        }
+
+        // New non-system modules default to modules/<module>/config/.
+        if ($moduleDirectory === null) {
+            $moduleDirectory = $this->modulePaths[0] . $module . '/';
+        }
+
+        if ($filePath === null) {
+            $filePath = $moduleDirectory . 'config/' . $fileKey . '.php';
+        }
+
+        $cacheKey = 'module:' . $module . ':' . $fileKey;
+
+        $this->loadFile($cacheKey, $filePath);
 
         return [$cacheKey, $subKey];
     }
