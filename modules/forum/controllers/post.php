@@ -53,7 +53,7 @@ class ForumPost extends Controller
         }
 
         // GET → form
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         echo $this->view->render($this, 'create', 'main', [
             'title'               => 'New thread',
@@ -174,7 +174,7 @@ class ForumPost extends Controller
         string $title,
         string $content
     ): void {
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         echo $this->view->render($this, 'create', 'main', [
             'title'               => 'New thread',

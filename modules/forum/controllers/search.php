@@ -10,7 +10,7 @@ class ForumSearch extends Controller
 {
     public function indexAction(): void
     {
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         $q = trim((string) $this->request->get('q', 'string', ''));
         $userId = $this->auth->check() ? (int) $this->auth->id() : 0;

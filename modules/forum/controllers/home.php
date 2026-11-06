@@ -9,7 +9,7 @@ class ForumHome extends Controller
 {
     public function indexAction(): void
     {
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         $userId = $this->auth->check() ? (int) $this->auth->id() : 0;
         $acc = forum_access_clause('c.access_role');
@@ -78,7 +78,7 @@ class ForumHome extends Controller
 
     public function whatsNewAction(): void
     {
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
         $userId = $this->auth->check() ? (int) $this->auth->id() : 0;
         $acc = forum_access_clause('c.access_role');
 

@@ -19,7 +19,7 @@ class ForumThread extends Controller
         }
         [$thread, $category] = $found;
 
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         try {
             $this->db->query(
@@ -238,7 +238,7 @@ class ForumThread extends Controller
             $content = (string) ($post['content'] ?? '');
         }
 
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
         echo $this->view->render($this, 'edit', 'main', [
             'title'    => 'Edit post',
             'thread'   => $thread,

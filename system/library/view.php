@@ -873,8 +873,8 @@ class View
         $base = rtrim($this->request->baseUrl(), '/');
 
         $candidates = [
-            'modules/'        . $module . '/asset/' . $path,
-            'system/modules/' . $module . '/asset/' . $path,
+            'modules/'        . $module . '/assets/' . $path,
+            'system/modules/' . $module . '/assets/' . $path,
         ];
 
         foreach ($candidates as $rel) {

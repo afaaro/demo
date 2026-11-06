@@ -37,7 +37,7 @@ class ForumCategory extends Controller
             return;
         }
 
-        $this->view->addModuleStyle('forum', 'css/forum.css');
+        $this->view->addModuleStyle('forum', 'forum.css');
 
         $categoryId = (int) $category['id'];
         $userId     = $this->auth->check() ? (int) $this->auth->id() : 0;
