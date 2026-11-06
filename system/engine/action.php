@@ -94,8 +94,14 @@ final class Route {
     public function allowsMethod(string $method): bool
     {
         $method = strtoupper($method);
-        if ($method === 'HEAD') $method = 'GET';
-        return in_array($method, array_map('strtoupper', $this->methods), true);
+        $allowedMethods = array_map('strtoupper', $this->methods);
+
+        // HEAD is automatically supported by GET routes.
+        if ($method === 'HEAD' && in_array('GET', $allowedMethods, true)) {
+            return true;
+        }
+
+        return in_array($method, $allowedMethods, true);
     }
 }
 
