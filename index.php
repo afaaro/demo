@@ -36,6 +36,16 @@ try {
             http_response_code(404);
             include BASEDIR . 'themes/default/errors/404.php';
         },
+        405 => static function () use ($e) {
+            http_response_code(405);
+
+            if ($e instanceof \System\Engine\MethodNotAllowedException
+                && $e->allowedMethods !== []) {
+                header('Allow: ' . implode(', ', $e->allowedMethods));
+            }
+
+            include BASEDIR . 'themes/default/errors/405.php';
+        },
         419 => static function () use ($registry) {
             // 419 is unofficial; Apache/mod_fcgid remaps it to 500.
             http_response_code(403);

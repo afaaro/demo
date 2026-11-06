@@ -31,8 +31,14 @@ class ForbiddenException extends RuntimeException
 
 class MethodNotAllowedException extends RuntimeException
 {
-    public function __construct(string $message = 'Method Not Allowed', ?Throwable $previous = null)
-    {
+    /**
+     * @param array<int, string> $allowedMethods
+     */
+    public function __construct(
+        string $message = 'Method Not Allowed',
+        public readonly array $allowedMethods = [],
+        ?Throwable $previous = null
+    ) {
         parent::__construct($message, 405, $previous);
     }
 }
@@ -156,8 +162,17 @@ class Action
         // 4. Method check (FIX #new)
         $method = $request->method();
         if (!$route->allowsMethod($method)) {
+            $allowedMethods = array_map('strtoupper', $route->methods);
+
+            // HEAD is supported automatically when GET is allowed.
+            if (in_array('GET', $allowedMethods, true)
+                && !in_array('HEAD', $allowedMethods, true)) {
+                $allowedMethods[] = 'HEAD';
+            }
+
             throw new MethodNotAllowedException(
-                "Method {$method} not allowed for '{$uri}'."
+                "Method {$method} not allowed for '{$uri}'.",
+                $allowedMethods
             );
         }
 
