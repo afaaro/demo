@@ -81,13 +81,6 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
     ],
-    'media/interact/comment' => [
-        'controller' => 'media/interact',
-        'action'     => 'comment',
-        'auth'       => true,
-        'methods'    => ['POST'],
-    ],
-
     'media/admin' => [
         'controller' => 'media/admin/home',
         'action'     => 'index',

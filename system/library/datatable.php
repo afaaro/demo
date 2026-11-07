@@ -111,7 +111,6 @@ class DataTable {
             }
             $html .= '<div class="card-body p-0">' . $table . '</div>';
             $html .= '</form>';
-            $html .= $this->filterFormScript();
         } else {
             $html .= '<div class="card-body p-0">' . $table . '</div>';
         }
@@ -182,38 +181,6 @@ class DataTable {
         }
 
         return $html;
-    }
-
-    private function filterFormScript(): string
-    {
-        return <<<'JS'
-<script>
-(function (form) {
-    if (!form || form.dataset.blurSearch === '1') {
-        return;
-    }
-    form.dataset.blurSearch = '1';
-    form.addEventListener('focusout', function (event) {
-        var input = event.target;
-        if (!input || !input.matches || !input.matches('input[type="search"], input[name="q"]')) {
-            return;
-        }
-        var next = event.relatedTarget;
-        if (next && next.closest && next.closest('a, button')) {
-            return;
-        }
-        if (input.value === input.defaultValue) {
-            return;
-        }
-        if (typeof form.requestSubmit === 'function') {
-            form.requestSubmit();
-        } else {
-            form.submit();
-        }
-    });
-})(document.getElementById('dataset-filter'));
-</script>
-JS;
     }
 
     private function renderToolbarFields(): string {

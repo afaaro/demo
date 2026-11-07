@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/comments",
+    "description": "Site-wide comments embed, hub, and moderation.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Comments"
+    }
+}

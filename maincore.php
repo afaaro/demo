@@ -39,6 +39,7 @@ require_once BASEDIR . 'system' . DS . 'engine' . DS . 'autoloader.php';
 $loader = new Autoloader();
 $loader->addNamespace('System\\', BASEDIR . 'system');
 $loader->addNamespace('Module\\', BASEDIR . 'modules');
+$loader->addNamespace('Module\\Comments\\', BASEDIR . 'system' . DS . 'modules' . DS . 'comments');
 $loader->register();
 
 MB::Initialize();

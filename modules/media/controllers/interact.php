@@ -91,57 +91,6 @@ class MediaInteract extends Controller
         ]);
     }
 
-    public function commentAction(): void
-    {
-        $this->jsonHeader();
-
-        if (!$this->request->isPost() || !$this->request->verifyToken()) {
-            echo json_encode(['success' => false, 'error' => 'Invalid request.']);
-            return;
-        }
-
-        $userId = (int) ($this->auth->id() ?? 0);
-        if ($userId < 1) {
-            echo json_encode(['success' => false, 'error' => 'Authentication required.']);
-            return;
-        }
-
-        $videoId = media_normalize_video_id($this->request->post('video_id', 'string', ''));
-        $text = trim((string) $this->request->post('comment_text', 'string', ''));
-        if ($videoId === '' || $text === '') {
-            echo json_encode(['success' => false, 'error' => 'Comment cannot be empty.']);
-            return;
-        }
-        if (mb_strlen($text) > 2000) {
-            echo json_encode(['success' => false, 'error' => 'Comment is too long.']);
-            return;
-        }
-
-        $videos = new VideoRepository($this->db);
-        if ($videos->findPublic($videoId) === null) {
-            echo json_encode(['success' => false, 'error' => 'Video not found.']);
-            return;
-        }
-
-        $this->db->query(
-            'INSERT INTO `#__media_video_comments` (`video_id`, `user_id`, `comment_text`, `created_at`)
-             VALUES (?, ?, ?, ?)',
-            [$videoId, $userId, $text, date('Y-m-d H:i:s')]
-        );
-
-        $label = trim((string) ($this->auth->displayName ?: $this->auth->username));
-        if ($label === '') {
-            $label = 'User';
-        }
-
-        echo json_encode([
-            'success'  => true,
-            'username' => $label,
-            'comment'  => $text,
-            'date'     => 'Just now',
-        ]);
-    }
-
     private function jsonHeader(): void
     {
         header('Content-Type: application/json; charset=utf-8');

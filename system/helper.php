@@ -70,7 +70,7 @@ function get_enabled_module(string $name): bool
         return true;
     }
 
-    // System modules (tools/user/search) are always considered enabled when present on disk.
+    // System modules (tools/user/search/comments/…) are always considered enabled when present on disk.
     $systemPath = (defined('BASEDIR') ? BASEDIR : '') . 'system/modules/' . $name;
     return is_dir($systemPath);
 }

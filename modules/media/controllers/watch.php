@@ -22,7 +22,6 @@ class MediaWatch extends Controller
         $reactions = $videos->reactionCounts($id);
         $userId = (int) ($this->auth->id() ?? 0);
         $userReaction = $videos->userReaction($id, $userId);
-        $comments = $videos->comments($id);
         $recommendations = $videos->recommendations($id, 8);
         $csrf = $this->request->csrfToken();
 
@@ -31,10 +30,8 @@ class MediaWatch extends Controller
             $video,
             $reactions,
             $userReaction,
-            $comments,
             $recommendations,
-            $csrf,
-            $userId
+            $csrf
         ): void {
             include get_module_path('media') . '/views/watch.php';
         }, 'main', ['title' => (string) $video['title']]);

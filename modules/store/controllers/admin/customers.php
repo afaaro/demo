@@ -258,14 +258,13 @@ class StoreAdminCustomers extends Controller
 (function () {
   const filterForm = document.getElementById('sf-cust-filters');
   if (filterForm) {
-    let t = null;
     document.querySelectorAll('.sf-cust-filters input').forEach(function (inp) {
-      inp.addEventListener('input', function () {
-        clearTimeout(t);
-        t = setTimeout(function () { filterForm.submit(); }, 400);
-      });
       inp.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); filterForm.submit(); }
+      });
+      inp.addEventListener('focusout', function () {
+        if (inp.value === inp.defaultValue) return;
+        filterForm.submit();
       });
     });
   }

@@ -804,10 +804,9 @@ class StoreAdminProducts extends Controller
                                 colFilters.submit();
                             }
                         });
-                        let t = null;
-                        input.addEventListener('input', function () {
-                            clearTimeout(t);
-                            t = setTimeout(function () { colFilters.submit(); }, 500);
+                        input.addEventListener('focusout', function () {
+                            if (input.value === input.defaultValue) return;
+                            colFilters.submit();
                         });
                     });
                 }

@@ -302,6 +302,16 @@ class NewsHome extends Controller
             echo $this->tagLine($item);
             echo '<div class="news-body">' . $this->renderBody($item->body) . '</div>';
 
+            if (!$preview && $this->commentsEnabled()) {
+                $commentsPath = get_module_path('comments');
+                if ($commentsPath !== null) {
+                    require_once $commentsPath . '/helpers/functions.php';
+                    echo comments_render('news', 'article', (string) (int) $item->id, [
+                        'login_query' => ['next' => 'news/view', 'slug' => $item->slug],
+                    ]);
+                }
+            }
+
             echo '<div class="news-article__foot">'
                . '<a class="news-back" href="' . $e($backUrl) . '">&larr; Back to news</a>'
                . '</div></article>';
@@ -651,19 +661,33 @@ class NewsHome extends Controller
     private function postsPerPage(): int
     {
         $default = 12;
+        $cfg = $this->newsModuleConfig();
+        $n = (int) ($cfg['posts_per_page'] ?? $default);
+        return max(1, min(100, $n > 0 ? $n : $default));
+    }
+
+    private function commentsEnabled(): bool
+    {
+        $cfg = $this->newsModuleConfig();
+        $raw = $cfg['allow_comments'] ?? false;
+        if (is_bool($raw)) {
+            return $raw;
+        }
+        return in_array((string) $raw, ['1', 'true', 'on', 'yes'], true);
+    }
+
+    /** @return array<string, mixed> */
+    private function newsModuleConfig(): array
+    {
         try {
             $row = $this->db->first('modules', ['name' => 'news']);
             if ($row === [] || empty($row['config'])) {
-                return $default;
+                return [];
             }
             $cfg = json_decode((string) $row['config'], true);
-            if (!is_array($cfg)) {
-                return $default;
-            }
-            $n = (int) ($cfg['posts_per_page'] ?? $default);
-            return max(1, min(100, $n > 0 ? $n : $default));
+            return is_array($cfg) ? $cfg : [];
         } catch (\Throwable) {
-            return $default;
+            return [];
         }
     }
 }

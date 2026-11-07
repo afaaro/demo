@@ -41,34 +41,6 @@
     });
   };
 
-  window.mediaPostComment = function (videoId) {
-    var input = document.getElementById('media-comment-input');
-    if (!input) return;
-    var text = input.value.trim();
-    if (!text) return;
-
-    return postForm(window.MEDIA_URLS.comment, {
-      video_id: videoId,
-      comment_text: text,
-    }).then(function (data) {
-      if (!data.success) {
-        alert(data.error || 'Could not post comment.');
-        return;
-      }
-      var wrap = document.getElementById('media-comments-list');
-      var empty = document.getElementById('media-comments-empty');
-      if (empty) empty.remove();
-      var el = document.createElement('div');
-      el.className = 'media-comment';
-      el.innerHTML =
-        '<time>Just now</time><strong></strong><p></p>';
-      el.querySelector('strong').textContent = data.username;
-      el.querySelector('p').textContent = data.comment;
-      wrap.insertBefore(el, wrap.firstChild);
-      input.value = '';
-    });
-  };
-
   function extractThumb(file) {
     return new Promise(function (resolve) {
       if (!file || !file.type.startsWith('video/')) {

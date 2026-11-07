@@ -37,7 +37,7 @@ class Action
         }
 
         // Core system modules stay reachable even if missing from #__modules.
-        $protected = ['tools', 'user', 'search'];
+        $protected = ['tools', 'user', 'search', 'comments'];
         $authSvc = $this->registry->get('user');
         if (!in_array($module, $protected, true)
             && !$authSvc->can('tools.admin.module.index')

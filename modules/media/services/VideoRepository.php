@@ -212,6 +212,15 @@ final class VideoRepository
             'DELETE FROM `#__media_video_comments` WHERE `video_id` = ?',
             [$videoId]
         );
+        try {
+            $this->db->query(
+                "DELETE FROM `#__comments`
+                  WHERE `module` = 'media' AND `entity_type` = 'video' AND `entity_id` = ?",
+                [$videoId]
+            );
+        } catch (\Throwable) {
+            // Shared comments table may not exist yet.
+        }
         $this->db->query(
             'DELETE FROM `#__media_video_reactions` WHERE `video_id` = ?',
             [$videoId]
@@ -246,23 +255,6 @@ final class VideoRepository
             [$videoId, $userId]
         )->row;
         return $row === [] ? null : (string) $row['type'];
-    }
-
-    /**
-     * @return list<array<string,mixed>>
-     */
-    public function comments(string $videoId, int $limit = 50): array
-    {
-        $limit = max(1, min(100, $limit));
-        return $this->db->query(
-            "SELECT c.*, COALESCE(NULLIF(u.`display_name`, ''), u.`username`) AS username
-             FROM `#__media_video_comments` c
-             INNER JOIN `#__users` u ON u.`id` = c.`user_id`
-             WHERE c.`video_id` = ?
-             ORDER BY c.`created_at` DESC
-             LIMIT {$limit}",
-            [$videoId]
-        )->rows;
     }
 
     public function countAll(): int

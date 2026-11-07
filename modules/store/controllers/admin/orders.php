@@ -697,15 +697,20 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
   }
 
   if (colFilters) {
-    let t = null;
     document.querySelectorAll('[form="sf-orders-col-filters"]').forEach(function (input) {
-      const ev = input.tagName === 'SELECT' ? 'change' : 'input';
-      input.addEventListener(ev, function () {
-        clearTimeout(t);
-        t = setTimeout(function () { colFilters.submit(); }, input.tagName === 'SELECT' ? 0 : 400);
-      });
+      if (input.tagName === 'SELECT') {
+        input.addEventListener('change', function () { colFilters.submit(); });
+        return;
+      }
       input.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); colFilters.submit(); }
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          colFilters.submit();
+        }
+      });
+      input.addEventListener('focusout', function () {
+        if (input.value === input.defaultValue) return;
+        colFilters.submit();
       });
     });
   }
