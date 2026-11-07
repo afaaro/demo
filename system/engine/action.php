@@ -12,7 +12,7 @@ use Throwable;
  * HTTP router: resolve URI → Route, enforce auth/CSRF, dispatch controller action.
  *
  * Modules may expose Services\RequestBootstrap::boot($uri) for per-request setup
- * (e.g. StoreFeeder tenant context) without hard-coding module logic here.
+ * (e.g. Store tenant context) without hard-coding module logic here.
  */
 class Action
 {
@@ -36,8 +36,8 @@ class Action
             throw new NotFoundException("Invalid route: '{$uri}'.");
         }
 
-        // Protected modules stay reachable so admins can recover a broken enable list.
-        $protected = ['tools', 'user'];
+        // Core system modules stay reachable even if missing from #__modules.
+        $protected = ['tools', 'user', 'search'];
         $authSvc = $this->registry->get('user');
         if (!in_array($module, $protected, true)
             && !$authSvc->can('tools.admin.module.index')
@@ -207,21 +207,32 @@ class Action
 
     private function resolveHomeFallback(string $uri, string $module, string $modulePath): ?Route
     {
-        $type = $this->isAdminRoute($uri) ? 'admin/home' : 'home';
-        $file = $modulePath . DS . 'controllers' . DS . str_replace('/', DS, $type) . '.php';
-
-        if (!is_file($file)) {
+        // Exact module root only (e.g. "search", "news") — not nested paths.
+        if ($uri !== $module) {
             return null;
         }
 
-        return new Route(
-            module:  $module,
-            url:     $module . '/' . $type,
-            pattern: $uri,
-            class:   $this->controllerClass($module . '/' . $type),
-            file:    $file,
-            methods: ['GET', 'POST'],
-        );
+        $candidates = $this->isAdminRoute($uri)
+            ? ['admin/home', 'admin/index']
+            : ['home', 'index'];
+
+        foreach ($candidates as $type) {
+            $file = $modulePath . DS . 'controllers' . DS . str_replace('/', DS, $type) . '.php';
+            if (!is_file($file)) {
+                continue;
+            }
+
+            return new Route(
+                module:  $module,
+                url:     $module . '/' . $type,
+                pattern: $uri,
+                class:   $this->controllerClass($module . '/' . $type),
+                file:    $file,
+                methods: ['GET', 'POST'],
+            );
+        }
+
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -290,7 +301,7 @@ class Action
 
     /**
      * Permission key shape: {module}.{controllerPathDots}.{action}
-     * e.g. storefeeder.admin.products.index
+     * e.g. store.admin.products.index
      */
     private function derivePermission(Route $route): ?string
     {
@@ -339,7 +350,7 @@ class Action
         }
 
         // Signed / webhook callbacks that opt out via route map, plus legacy ebay prefixes.
-        foreach (['storefeeder/ebay/'] as $prefix) {
+        foreach (['store/ebay/'] as $prefix) {
             if (str_starts_with($uri, $prefix)) {
                 return;
             }

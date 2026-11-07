@@ -1,4 +1,7 @@
 <?php
+declare(strict_types=1);
+
+use System\Engine\Controller;
 
 class SearchIndex extends Controller
 {
@@ -19,18 +22,21 @@ class SearchIndex extends Controller
     {
         $q = trim((string) $this->request->get('q', 'string', ''));
         $groups = $q === '' ? [] : $this->collect($q);
+        $total = $this->hitCount($groups);
+        $title = $q !== '' ? 'Search: ' . $q : 'Search';
 
-        $this->asset->addTitle($q !== '' ? 'Search: ' . $q : 'Search');
-        $this->asset->addModuleStyle('search', 'search.css');
+        $this->view->assign('title', $title);
+        $this->view->setTitle($title);
+        $this->view->addModuleStyle('search', 'search.css');
 
-        $this->template('search/index', [
+        echo $this->view->inline(function () use ($q, $groups, $total): void {
+            include get_module_path('search') . '/views/index.php';
+        }, 'main', [
+            'title'  => $title,
             'q'      => $q,
             'groups' => $groups,
-            'total'  => $this->hitCount($groups),
+            'total'  => $total,
         ]);
-        $this->panels->hideAll('left');
-        $this->panels->hideAll('right');
-        $this->load->view();
     }
 
     /**

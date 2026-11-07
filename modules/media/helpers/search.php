@@ -1,5 +1,4 @@
 <?php
-
 declare(strict_types=1);
 
 return static function (string $q, $db, int $limit): array {
@@ -26,7 +25,7 @@ return static function (string $q, $db, int $limit): array {
     foreach ($videos as $row) {
         $hits[] = [
             'title'   => (string) ($row['title'] ?? ''),
-            'url'     => url('media/watch', ['id' => (int) $row['video_id']]),
+            'url'     => url('media/watch', ['id' => (string) $row['video_id']]),
             'snippet' => '',
             'meta'    => trim((string) ($row['channel_title'] ?? 'Video')),
             'image'   => trim((string) ($row['thumbnail_path'] ?? '')),

@@ -20,6 +20,9 @@
 
     <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
     <script src="<?= $view->asset('js/csrf.js') ?>"></script>
+    <?php foreach ($view->getScripts('header') as $src): ?>
+    <script src="<?= $view->e($src) ?>"></script>
+    <?php endforeach; ?>
     <?= $view->getBlock('head') ?>
 </head>
 <body class="admin-body">
@@ -93,6 +96,9 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="<?= $view->asset('js/admin.js') ?>" defer></script>
+<?php foreach ($view->getScripts('footer') as $src): ?>
+<script src="<?= $view->e($src) ?>" defer></script>
+<?php endforeach; ?>
 <?= $view->getBlock('scripts') ?>
 </body>
 </html>

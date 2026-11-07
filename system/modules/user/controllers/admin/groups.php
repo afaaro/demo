@@ -956,21 +956,21 @@ class UserAdminGroups extends Controller
                 ],
             ],
             'sf_ops' => [
-                'label' => 'StoreFeeder ops',
+                'label' => 'Store ops',
                 'perms' => [
-                    'storefeeder.*',
+                    'store.*',
                 ],
             ],
             'sf_orders' => [
                 'label' => 'Orders only',
                 'perms' => [
-                    'storefeeder.admin.orders.index',
-                    'storefeeder.admin.orders.view',
-                    'storefeeder.admin.orders.bulk',
-                    'storefeeder.admin.orders.ship',
-                    'storefeeder.admin.orders.label',
-                    'storefeeder.admin.orders.invoice',
-                    'storefeeder.admin.pickwaves.*',
+                    'store.admin.orders.index',
+                    'store.admin.orders.view',
+                    'store.admin.orders.bulk',
+                    'store.admin.orders.ship',
+                    'store.admin.orders.label',
+                    'store.admin.orders.invoice',
+                    'store.admin.pickwaves.*',
                 ],
             ],
             'read_users' => [

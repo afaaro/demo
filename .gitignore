@@ -2,6 +2,11 @@ vendor/
 uploads/*
 storage/*
 *.sql
-system/config/storefeeder.php
+system/config/store.php
 system/config/captcha.php
 system/config/database.php
+modules/store/config/app.php
+modules/store/config/ebay.php
+modules/store/config/amazon.php
+modules/store/config/paypal.php
+system/config/storefeeder.php

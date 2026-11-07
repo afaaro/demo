@@ -1,0 +1,16 @@
+﻿<?php
+declare(strict_types=1);
+
+/**
+ * Optional module-level Amazon defaults (gitignored when filled).
+ * Prefer system/config/store.php for production secrets.
+ */
+return [
+    'application_id' => '',
+    'client_id'      => '',
+    'client_secret'  => '',
+    'aws_access_key' => '',
+    'aws_secret_key' => '',
+    'role_arn'       => '',
+    'region'         => 'eu-west-1',
+];

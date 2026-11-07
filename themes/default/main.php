@@ -39,6 +39,9 @@
     <?php endif; ?>
     <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js" defer></script>
     <script src="<?= $view->asset('js/csrf.js') ?>" defer></script>
+    <?php foreach ($view->getScripts('header') as $src): ?>
+    <script src="<?= $view->e($src) ?>" defer></script>
+    <?php endforeach; ?>
     <?= $view->getBlock('head') ?>
 </head>
 <body class="site-body<?= $hasToolbar ? ' has-admin-toolbar' : '' ?>">
@@ -102,6 +105,12 @@ $user     = $view->user->current();
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="<?= $view->asset('js/main.js') ?>" defer></script>
+<?php foreach ($view->getScripts('footer') as $src): ?>
+<script src="<?= $view->e($src) ?>" defer></script>
+<?php endforeach; ?>
+<?php foreach ($view->getInlineScripts() as $js): ?>
+<script><?= $js ?></script>
+<?php endforeach; ?>
 <?= $view->getBlock('scripts') ?>
 </body>
 </html>

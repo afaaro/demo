@@ -60,9 +60,11 @@ final class Config
      * Retrieve a value using dot notation: 'app.debug', 'database.host'.
      * First segment is the file key; the rest is the path inside it.
      *
-     * Module shortcut: when system/config/{module}.php is missing but
-     * modules/{module}/config/ exists, keys resolve from that folder
-     * (app.php merges at the top level; ebay.php → storefeeder.ebay, etc.).
+     * Module shortcut: modules/{module}/config/* loads as a bundle
+     * (app.php at top level; ebay.php → store.ebay, etc.). When
+     * system/config/{module}.php also exists, it overlays the bundle
+     * so platform secrets can live in system/config without hiding
+     * module ebay/amazon files.
      */
     public function get(string $key, mixed $default = null): mixed
     {
@@ -248,24 +250,30 @@ final class Config
             $filePath = $this->basePath . $fileKey . '.php';
             $data     = [];
 
-            if (is_file($filePath)) {
-                $data = include $filePath;
+            // Module bundle first (ebay/amazon/app), then system overlay.
+            $bundle = $this->loadModuleBundle($fileKey);
+            if ($bundle !== null) {
+                $data = $bundle;
+                $configDir = $this->findModuleConfigDir($fileKey);
+                if ($configDir !== null) {
+                    $filePath = $configDir . 'app.php';
+                }
+            }
 
-                if (!is_array($data)) {
+            $systemPath = $this->basePath . $fileKey . '.php';
+            if (is_file($systemPath)) {
+                $system = include $systemPath;
+
+                if (!is_array($system)) {
                     throw new RuntimeException(sprintf(
                         "Config file '%s' must return an array, got: %s",
                         $fileKey,
-                        get_debug_type($data)
+                        get_debug_type($system)
                     ));
                 }
-            } else {
-                // Prefer modules/{name}/config/* when system/config/{name}.php is absent.
-                $bundle = $this->loadModuleBundle($fileKey);
-                if ($bundle !== null) {
-                    $data = $bundle;
-                    $configDir = $this->findModuleConfigDir($fileKey);
-                    $filePath = ($configDir ?? $filePath) . 'app.php';
-                }
+
+                $data = array_replace_recursive($data, $system);
+                $filePath = $systemPath;
             }
 
             self::$loaded[$cacheKey] = ['path' => $filePath, 'data' => $data];
@@ -278,8 +286,8 @@ final class Config
      * Get a module configuration value.
      *
      * Examples:
-     * getModule('storefeeder', 'ebay.client_id')
-     * getModule('storefeeder', 'app.platform_user_ids')
+     * getModule('store', 'ebay.client_id')
+     * getModule('store', 'app.platform_user_ids')
      * getModule('news', 'settings.per_page', 10)
      */
     public function getModule(string $module, string $key, mixed $default = null): mixed
@@ -304,7 +312,7 @@ final class Config
     /**
      * Find a module configuration file.
      *
-     * Example: modules/storefeeder/config/ebay.php
+     * Example: modules/store/config/ebay.php
      *
      * @return array{0: string, 1: ?string}
      */

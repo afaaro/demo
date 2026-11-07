@@ -673,8 +673,8 @@ class Request
     public function enforceRateLimit(string $action, int $maxHits = 60, int $window = 60): void
     {
         $tenantPrefix = '';
-        if (class_exists(\Module\StoreFeeder\Services\TenantContext::class)) {
-            $tid = \Module\StoreFeeder\Services\TenantContext::get()->id();
+        if (class_exists(\Module\Store\Services\TenantContext::class)) {
+            $tid = \Module\Store\Services\TenantContext::get()->id();
             if ($tid !== null && $tid > 0) {
                 $tenantPrefix = 't' . $tid . ':';
             }

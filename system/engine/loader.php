@@ -21,7 +21,7 @@ use System\Services\User;
 /**
  * Resolve module / system services without hard-coding FQCNs.
  *
- * From a StoreFeeder controller:
+ * From a Store controller:
  *
  *   $orders   = $this->load->service('OrderRepository');
  *   $channels = $this->load->service('ChannelRepository');
@@ -29,19 +29,19 @@ use System\Services\User;
  *
  * Cross-module / system:
  *
- *   $this->load->service('storefeeder/OrderRepository');
+ *   $this->load->service('store/OrderRepository');
  *   $this->load->service('system/UserSessionService');
  *   $this->load->service('news/NewsRepository');
  *
  * Nested paths map to nested namespaces:
  *
  *   $this->load->service('channels/marketplace/ebay/EbayFulfillmentClient');
- *   // → Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayFulfillmentClient
+ *   // → Module\Store\Services\Channels\Marketplace\Ebay\EbayFulfillmentClient
  *
  * Pass constructor args explicitly when auto-wiring is not enough:
  *
  *   $this->load->service('CredentialsVault', [
- *       (string) $this->config->get('storefeeder.credentials_key', ''),
+ *       (string) $this->config->get('store.credentials_key', ''),
  *   ]);
  */
 final class Loader
@@ -132,7 +132,7 @@ final class Loader
      * Include a module helper file once (e.g. sidebar.php, route.php).
      *
      *   $this->load->helper('sidebar');
-     *   $this->load->helper('storefeeder/integrations');
+     *   $this->load->helper('store/integrations');
      *
      * @return mixed Return value of the included file (often an array)
      */
@@ -256,7 +256,7 @@ final class Loader
             return ['system', $parts];
         }
 
-        // Explicit module: storefeeder/OrderRepository
+        // Explicit module: store/OrderRepository
         if (count($parts) >= 2 && get_module_path($parts[0]) !== null) {
             $module = array_shift($parts);
             return [strtolower((string) $module), $parts];
@@ -269,7 +269,7 @@ final class Loader
 
         throw new InvalidArgumentException(
             "Ambiguous service route '{$route}'. Prefix with the module "
-            . "(e.g. storefeeder/OrderRepository) or call from a controller."
+            . "(e.g. store/OrderRepository) or call from a controller."
         );
     }
 
@@ -301,7 +301,7 @@ final class Loader
             }
         }
 
-        // Fallback: storefeeder → Storefeeder (may not match StoreFeeder)
+        // Fallback: store → Store (may not match Store)
         return self::$moduleNsCache[$key] = $this->studly($module);
     }
 
@@ -316,11 +316,11 @@ final class Loader
 
         $this->resolving[] = $class;
         try {
-            // StoreFeeder vault: HKDF per tenant from master key.
+            // Store vault: HKDF per tenant from master key.
             if ($args === [] && str_ends_with($class, '\\CredentialsVault')) {
                 $key = '';
                 if ($this->registry->has('config')) {
-                    $key = (string) $this->registry->get('config')->get('storefeeder.credentials_key', '');
+                    $key = (string) $this->registry->get('config')->get('store.credentials_key', '');
                 }
                 if (method_exists($class, 'forTenant')) {
                     return $class::forTenant($key !== '' ? $key : null);

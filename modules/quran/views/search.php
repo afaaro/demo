@@ -4,7 +4,7 @@
 ?>
 <div class="quran quran--search">
     <header class="quran-toolbar">
-        <a class="quran-btn" href="<?= escape(url('quran')) ?>">Back to reader</a>
+        <a class="quran-btn" href="<?= escape(url('quran', ['sura' => 1, 'aya' => 0])) ?>">Back to reader</a>
         <form class="quran-search" method="get" action="<?= escape(url('quran/search')) ?>">
             <label class="quran-field quran-field--grow">
                 <span>Search</span>

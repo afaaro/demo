@@ -66,7 +66,13 @@ function get_enabled_module(string $name): bool
         $rows = registry('db')->query("SELECT name FROM #__modules WHERE enabled = 1")->rows;
         $cache = array_column($rows, 'name');
     }
-    return in_array($name, $cache, true);
+    if (in_array($name, $cache, true)) {
+        return true;
+    }
+
+    // System modules (tools/user/search) are always considered enabled when present on disk.
+    $systemPath = (defined('BASEDIR') ? BASEDIR : '') . 'system/modules/' . $name;
+    return is_dir($systemPath);
 }
 
 function debug(mixed ...$args): void
@@ -157,15 +163,228 @@ function console(): \System\Engine\Console
     return $instance ??= new \System\Engine\Console();
 }
 
+if (!function_exists('load_class')) {
+    function load_class(
+        string $name,
+        string $type = 'library',
+        string $module = '',
+        ?string $className = null
+    ): object {
+        $registry = System\Engine\Registry::getInstance();
+
+        $studly = static function (string $value): string {
+            return str_replace(
+                ' ',
+                '',
+                ucwords(str_replace(['-', '_'], ' ', $value))
+            );
+        };
+
+        $type = strtolower($type);
+
+        /*
+         * Validate and convert a relative class path.
+         */
+        $validatePath = static function (
+            string $name,
+            string $type
+        ): array {
+            $name = str_replace('\\', '/', $name);
+
+            if (!preg_match('/^[a-zA-Z0-9_\/-]+$/', $name)) {
+                throw new InvalidArgumentException(
+                    'Invalid module ' . $type . ' path.'
+                );
+            }
+
+            $parts = explode('/', $name);
+
+            foreach ($parts as $part) {
+                if (!preg_match('/^[a-zA-Z0-9_-]+$/', $part)) {
+                    throw new InvalidArgumentException(
+                        'Invalid module ' . $type . ' path.'
+                    );
+                }
+            }
+
+            return $parts;
+        };
+
+        /*
+         * System library or engine.
+         */
+        if (in_array($type, ['library', 'engine'], true) && $module === '') {
+            if (!preg_match('/^[a-zA-Z0-9_-]+$/', $name)) {
+                throw new InvalidArgumentException(
+                    'Invalid class name.'
+                );
+            }
+
+            $class = $type === 'library'
+                ? 'System\\Library\\' . $studly($name)
+                : 'System\\Engine\\' . $studly($name);
+
+            $key = $type . '.' . $name;
+
+            if (!$registry->has($key)) {
+                $registry->singleton(
+                    $key,
+                    static function () use ($class) {
+                        if (!class_exists($class)) {
+                            throw new RuntimeException(
+                                'Class not found: ' . $class
+                            );
+                        }
+
+                        return new $class();
+                    }
+                );
+            }
+
+            return $registry->get($key);
+        }
+
+        /*
+         * Module library, model or controller.
+         */
+        if (in_array($type, ['library', 'model', 'controller'], true)) {
+
+            if (!preg_match('/^[a-zA-Z0-9_-]+$/', $module)) {
+                throw new InvalidArgumentException(
+                    'Invalid module name.'
+                );
+            }
+
+            $modulePath = get_module_path($module);
+
+            if ($modulePath === null) {
+                throw new RuntimeException(
+                    'Module not found: ' . $module
+                );
+            }
+
+            $parts = $validatePath($name, $type);
+
+            /*
+             * Resolve module directory.
+             */
+            $directory = match ($type) {
+                'library'    => 'libraries',
+                'model'      => 'models',
+                'controller' => 'controllers',
+            };
+
+            $file = $modulePath
+                . $directory
+                . DIRECTORY_SEPARATOR
+                . implode(DIRECTORY_SEPARATOR, $parts)
+                . '.php';
+
+            /*
+             * Resolve class name.
+             */
+            $classParts = array_merge([$module], $parts);
+
+            $class = $className ?? implode(
+                '',
+                array_map($studly, $classParts)
+            );
+
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $class)) {
+                throw new InvalidArgumentException(
+                    'Invalid ' . $type . ' class name.'
+                );
+            }
+
+            /*
+             * Registry key.
+             */
+            $key = $type . '.'
+                . $module
+                . '.'
+                . implode('/', $parts)
+                . '.'
+                . $class;
+
+            /*
+             * Module libraries are singletons.
+             * Models and controllers are fresh instances.
+             */
+            if ($type === 'library') {
+                if (!$registry->has($key)) {
+                    $registry->singleton(
+                        $key,
+                        static function () use ($file, $class, $type) {
+                            if (!is_file($file) || !is_readable($file)) {
+                                throw new RuntimeException(
+                                    ucfirst($type) . ' file not found: ' . $file
+                                );
+                            }
+
+                            require_once $file;
+
+                            if (!class_exists($class, false)) {
+                                throw new RuntimeException(
+                                    ucfirst($type) . ' class not found: ' . $class
+                                );
+                            }
+
+                            return new $class();
+                        }
+                    );
+                }
+            } else {
+                if (!$registry->has($key)) {
+                    $registry->factory(
+                        $key,
+                        static function () use ($file, $class, $type) {
+                            if (!is_file($file) || !is_readable($file)) {
+                                throw new RuntimeException(
+                                    ucfirst($type) . ' file not found: ' . $file
+                                );
+                            }
+
+                            require_once $file;
+
+                            if (!class_exists($class, false)) {
+                                throw new RuntimeException(
+                                    ucfirst($type) . ' class not found: ' . $class
+                                );
+                            }
+
+                            return new $class();
+                        }
+                    );
+                }
+            }
+
+            return $registry->get($key);
+        }
+
+        throw new InvalidArgumentException(
+            'Unsupported class type: ' . $type
+        );
+    }
+}
+
 function random_string(int $length = 10, string $extra = '-_&$%^'): string
 {
+    if ($length < 1) {
+        throw new InvalidArgumentException(
+            'The length must be greater than zero.'
+        );
+    }
+
     $letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-    $all     = $letters . '0123456789' . $extra;
-    $len     = max(1, $length);
+    $all = $letters . '0123456789' . $extra;
 
     $out = [];
-    for ($i = 0; $i < $len; $i++) {
-        $pool  = ($i === 0 || $i === $len - 1) ? $letters : $all;
+
+    for ($i = 0; $i < $length; $i++) {
+        $pool = ($i === 0 || $i === $length - 1)
+            ? $letters
+            : $all;
+
         $out[] = $pool[random_int(0, strlen($pool) - 1)];
     }
 

@@ -1,4 +1,7 @@
 <?php
+declare(strict_types=1);
+
+use System\Engine\Controller;
 
 class QuranIndex extends Controller
 {
@@ -23,9 +26,13 @@ class QuranIndex extends Controller
         }
 
         $surah = $reader->surah($sura);
-        if (!$surah) {
+        if ($surah === null) {
             $sura = 1;
             $surah = $reader->surah(1);
+        }
+        if ($surah === null) {
+            $this->renderEmpty();
+            return;
         }
 
         if ($aya > (int) $surah['ayah_count']) {
@@ -33,16 +40,16 @@ class QuranIndex extends Controller
         }
 
         $this->renderReader([
-            'mode'        => 'sura',
-            'current'     => $sura,
-            'highlight'   => $aya,
-            'title'       => $surah['name_so'] . ' — ' . $surah['name_latin'],
-            'heading_ar'  => $surah['name_ar'],
-            'heading'     => $surah['name_latin'] . ' (' . $surah['name_so'] . ')',
-            'meta'        => $surah['revelation'] . ' · ' . $surah['ayah_count'] . ' ayahs',
-            'ayahs'       => $reader->ayahsBySurah((int) $surah['id']),
-            'neighbors'   => $reader->neighbors('sura', $sura),
-            'surah'       => $surah,
+            'mode'       => 'sura',
+            'current'    => $sura,
+            'highlight'  => $aya,
+            'title'      => $surah['name_so'] . ' — ' . $surah['name_latin'],
+            'heading_ar' => $surah['name_ar'],
+            'heading'    => $surah['name_latin'] . ' (' . $surah['name_so'] . ')',
+            'meta'       => $surah['revelation'] . ' · ' . $surah['ayah_count'] . ' ayahs',
+            'ayahs'      => $reader->ayahsBySurah((int) $surah['id']),
+            'neighbors'  => $reader->neighbors('sura', $sura),
+            'surah'      => $surah,
         ], $reader);
     }
 
@@ -101,22 +108,23 @@ class QuranIndex extends Controller
         $results = ($q !== '' && $reader->isImported()) ? $reader->search($q) : [];
 
         $this->bootAssets('Search the Quran');
-        $view = get_module_path('quran') . '/views/search.php';
-        include $view;
-        $this->panels->hideAll('left');
-        $this->panels->hideAll('right');
-        $this->load->view();
+        echo $this->view->inline(function () use ($q, $results): void {
+            include get_module_path('quran') . '/views/search.php';
+        }, 'main', ['title' => 'Search the Quran']);
     }
 
+    /**
+     * @param array<string, mixed> $view
+     */
     private function renderReader(array $view, QuranReader $reader): void
     {
         $surahs = $reader->surahs();
         $translations = $reader->translations();
         $reciters = $reader->reciters();
-        $this->bootAssets($view['title']);
+        $this->bootAssets((string) $view['title']);
 
         $player = [
-            'ayahs'    => array_map(static function ($ayah) {
+            'ayahs' => array_map(static function ($ayah) {
                 return [
                     'id'    => (int) $ayah['id'],
                     'surah' => (int) $ayah['surah_id'],
@@ -135,26 +143,32 @@ class QuranIndex extends Controller
             'highlight' => $view['highlight'],
         ];
 
-        include get_module_path('quran') . '/views/reader.php';
-        $this->panels->hideAll('left');
-        $this->panels->hideAll('right');
-        $this->load->view();
+        echo $this->view->inline(function () use ($view, $surahs, $translations, $reciters, $player): void {
+            include get_module_path('quran') . '/views/reader.php';
+        }, 'main', ['title' => (string) $view['title']]);
     }
 
     private function renderEmpty(): void
     {
         $this->bootAssets('Quran');
-        echo '<div class="container py-5"><div class="alert alert-info">Quran text has not been imported yet. An administrator can import the Tanzil files from Quran → Import.</div></div>';
-        $this->panels->hideAll('left');
-        $this->panels->hideAll('right');
-        $this->load->view();
+        echo $this->view->inline(static function (): void {
+            echo '<div class="container py-5"><div class="alert alert-info">'
+               . 'Quran text has not been imported yet. An administrator can import the Tanzil files from Quran → Import.'
+               . '</div></div>';
+        }, 'main', ['title' => 'Quran']);
     }
 
     private function bootAssets(string $title): void
     {
-        $this->asset->addTitle($title);
-        $this->asset->addStyle('https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;700&display=swap');
-        $this->asset->addStyle($this->asset->moduleAsset('quran', 'quran.css'));
-        $this->asset->addScript($this->asset->moduleAsset('quran', 'quran.js'));
+        $this->view->assign('title', $title);
+        $this->view->setTitle($title);
+        $this->view->addStyle('https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
+        $this->view->addModuleStyle('quran', 'quran.css');
+        $this->view->addModuleScript('quran', 'quran.js');
+
+        // Some theme builds only flush the "scripts" block (not getScripts()).
+        // Push the player there too so audio controls work on production.
+        $src = $this->view->e($this->view->moduleAsset('quran', 'quran.js'));
+        $this->view->block('scripts', '<script src="' . $src . '" defer></script>');
     }
 }

@@ -1,8 +1,9 @@
 (function () {
     var root = document.querySelector('[data-quran-root]');
-    if (!root) {
+    if (!root || root.getAttribute('data-quran-ready') === '1') {
         return;
     }
+    root.setAttribute('data-quran-ready', '1');
 
     var dataNode = document.getElementById('quran-player-data');
     var data = { ayahs: [], reciters: [], highlight: 0 };
@@ -25,6 +26,12 @@
     };
 
     function absUrl(route) {
+        var moduleBase = (root.getAttribute('data-quran-base') || '').replace(/\/?$/, '');
+        if (moduleBase) {
+            // data-quran-base is the /quran prefix (e.g. /demo/quran)
+            var suffix = String(route || '').replace(/^quran\/?/, '');
+            return moduleBase + (suffix ? '/' + suffix : '');
+        }
         var base = document.querySelector('base');
         var rootUrl = base ? base.href : (window.location.origin + '/');
         return rootUrl.replace(/\/?$/, '/') + route.replace(/^\//, '');
@@ -62,7 +69,7 @@
 
     var showTrans = storage.get('quran.showTranslation', true);
     var transIds = storage.get('quran.translationIds', null);
-    var fontSize = storage.get('quran.fontSize', 32);
+    var fontSize = storage.get('quran.fontSize', 34);
     var reciterId = storage.get('quran.reciterId', data.reciters[0] ? data.reciters[0].id : 0);
     var repeat = storage.get('quran.repeat', 'off');
     var speed = storage.get('quran.speed', 1);
@@ -214,9 +221,21 @@
     }
 
     function setPlayLabel() {
-        if (playBtn) {
-            playBtn.textContent = playing ? 'Pause' : 'Play';
+        if (!playBtn) {
+            return;
         }
+        var label = playBtn.querySelector('[data-quran-play-label]');
+        var icon = playBtn.querySelector('i');
+        var text = playing ? 'Pause' : 'Play';
+        if (label) {
+            label.textContent = text;
+        } else {
+            playBtn.textContent = text;
+        }
+        if (icon) {
+            icon.className = playing ? 'bi bi-pause-fill' : 'bi bi-play-fill';
+        }
+        playBtn.setAttribute('aria-label', text);
     }
 
     function playIndex(index) {

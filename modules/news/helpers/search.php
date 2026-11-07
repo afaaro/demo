@@ -1,5 +1,4 @@
 <?php
-
 declare(strict_types=1);
 
 return static function (string $q, $db, int $limit): array {
@@ -9,14 +8,14 @@ return static function (string $q, $db, int $limit): array {
 
     try {
         $rows = $db->query(
-            "SELECT p.title, p.slug, p.excerpt, p.content, p.image, p.published_at, p.created_at,
-                    c.name AS category_name
-             FROM `#__news_post` p
-             LEFT JOIN `#__news_category` c ON c.id = p.category_id
-             WHERE p.status = 'published'
-               AND (p.title LIKE ? OR p.excerpt LIKE ? OR p.content LIKE ?)
-             ORDER BY COALESCE(p.published_at, p.created_at) DESC, p.id DESC
-             LIMIT {$limit}",
+            "SELECT n.`title`, n.`slug`, n.`excerpt`, n.`body`, n.`image`, n.`published_at`, n.`created_at`,
+                    c.`name` AS category_name
+               FROM `#__news` n
+               LEFT JOIN `#__news_categories` c ON c.`id` = n.`category_id`
+              WHERE n.`status` = 'published'
+                AND (n.`title` LIKE ? OR n.`excerpt` LIKE ? OR n.`body` LIKE ?)
+              ORDER BY COALESCE(n.`published_at`, n.`created_at`) DESC, n.`id` DESC
+              LIMIT {$limit}",
             [$like, $like, $like]
         )->rows ?? [];
     } catch (Throwable) {
@@ -26,7 +25,7 @@ return static function (string $q, $db, int $limit): array {
     foreach ($rows as $row) {
         $title = html_entity_decode((string) ($row['title'] ?? ''), ENT_QUOTES, 'UTF-8');
         $excerpt = trim((string) ($row['excerpt'] ?? ''));
-        $snippet = $excerpt !== '' ? $excerpt : (string) ($row['content'] ?? '');
+        $snippet = $excerpt !== '' ? $excerpt : (string) ($row['body'] ?? '');
         $snippet = html_entity_decode(trim(preg_replace('/\s+/u', ' ', strip_tags($snippet)) ?? ''), ENT_QUOTES, 'UTF-8');
         if (mb_strlen($snippet) > 180) {
             $snippet = mb_substr($snippet, 0, 179) . '…';

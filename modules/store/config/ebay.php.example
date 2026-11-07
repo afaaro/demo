@@ -1,0 +1,14 @@
+﻿<?php
+declare(strict_types=1);
+
+/**
+ * Optional module-level eBay defaults (gitignored when filled).
+ * Prefer system/config/store.php for production secrets.
+ */
+return [
+    'client_id'     => '',
+    'client_secret' => '',
+    'ru_name'       => '',
+    'dev_id'        => '',
+    'sandbox'       => false,
+];

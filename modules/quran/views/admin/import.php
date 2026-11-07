@@ -5,7 +5,7 @@
 <div class="container-fluid px-4 py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3 mb-0">Quran Import</h1>
-        <a href="<?= escape(url('quran')) ?>" class="btn btn-outline-secondary" target="_blank" rel="noopener">Open reader</a>
+        <a href="<?= escape(url('quran', ['sura' => 1, 'aya' => 0])) ?>" class="btn btn-outline-secondary" target="_blank" rel="noopener">Open reader</a>
     </div>
 
     <div class="row g-3 mb-4">

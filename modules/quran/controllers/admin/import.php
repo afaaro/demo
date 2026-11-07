@@ -1,7 +1,18 @@
 <?php
+declare(strict_types=1);
+
+use System\Engine\Controller;
+use System\Library\Dataset;
 
 class QuranAdminImport extends Controller
 {
+    protected function boot(): void
+    {
+        if (!$this->auth->check()) {
+            redirect_to('user/login', ['next' => 'quran/admin/import']);
+        }
+    }
+
     private function importer(): QuranImporter
     {
         $file = get_module_path('quran') . '/library/importer.php';
@@ -13,7 +24,6 @@ class QuranAdminImport extends Controller
 
     public function indexAction(): void
     {
-        $this->asset->addTitle('Quran Import');
         $stats = $this->stats();
         $importer = $this->importer();
         $files = [];
@@ -22,14 +32,16 @@ class QuranAdminImport extends Controller
             $files[$name] = is_file($path) ? filesize($path) : 0;
         }
 
-        include get_module_path('quran') . '/views/admin/import.php';
-        $this->load->view();
+        $this->view->assign('title', 'Quran Import');
+        echo $this->view->inline(function () use ($stats, $files): void {
+            include get_module_path('quran') . '/views/admin/import.php';
+        }, 'admin', ['title' => 'Quran Import']);
     }
 
     public function runAction(): void
     {
         if (!$this->request->isPost()) {
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
         $this->request->enforceCsrf();
 
@@ -44,13 +56,13 @@ class QuranAdminImport extends Controller
             $this->notify->error($e->getMessage());
         }
 
-        redirect('quran/admin/import');
+        redirect_to('quran/admin/import');
     }
 
     public function uploadAction(): void
     {
         if (!$this->request->isPost()) {
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
         $this->request->enforceCsrf();
 
@@ -61,23 +73,23 @@ class QuranAdminImport extends Controller
 
         if (!preg_match('/^[a-z]{2}\.[a-z0-9_-]{1,24}$/', $code)) {
             $this->notify->error('Code must look like so.abduh or en.sahih.');
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
         if ($name === '' || $language === '') {
             $this->notify->error('Name and language are required.');
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
 
         $upload = $_FILES['file'] ?? null;
         if (!is_array($upload) || (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
             $this->notify->error('Choose a Tanzil translation .txt file.');
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
 
         $tmp = (string) $upload['tmp_name'];
         if (!is_uploaded_file($tmp)) {
             $this->notify->error('Invalid upload.');
-            redirect('quran/admin/import');
+            redirect_to('quran/admin/import');
         }
 
         try {
@@ -87,15 +99,13 @@ class QuranAdminImport extends Controller
             $this->notify->error($e->getMessage());
         }
 
-        redirect('quran/admin/import');
+        redirect_to('quran/admin/import');
     }
 
     public function translationsAction(): void
     {
-        $this->asset->addTitle('Quran Translations');
-
-        echo $this->dataset
-            ->from('#__quran_translation')
+        $dataset = (new Dataset($this->registry))
+            ->from('quran_translation')
             ->searchable(['code', 'name', 'author', 'language'])
             ->sortable(['id', 'code', 'name', 'language', 'sort_order', 'enabled'])
             ->defaultSort('sort_order', 'asc')
@@ -110,15 +120,17 @@ class QuranAdminImport extends Controller
                 'author'     => 'Author',
                 'language'   => 'Lang',
                 'sort_order' => 'Order',
-                'enabled'    => static function ($row) {
+                'enabled'    => static function (array $row): string {
                     return (int) $row['enabled'] === 1
                         ? '<span class="badge bg-success">On</span>'
                         : '<span class="badge bg-secondary">Off</span>';
                 },
-            ])
-            ->render();
+            ]);
 
-        $this->load->view();
+        $this->view->assign('title', 'Quran Translations');
+        echo $this->view->inline(static function () use ($dataset): void {
+            echo $dataset->render();
+        }, 'admin', ['title' => 'Quran Translations']);
     }
 
     /**
@@ -126,11 +138,15 @@ class QuranAdminImport extends Controller
      */
     private function stats(): array
     {
-        return [
-            'surahs'       => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_surah`')->row['c'] ?? 0),
-            'ayahs'        => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_ayah`')->row['c'] ?? 0),
-            'translations' => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_translation`')->row['c'] ?? 0),
-            'reciters'     => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_reciter`')->row['c'] ?? 0),
-        ];
+        try {
+            return [
+                'surahs'       => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_surah`')->row['c'] ?? 0),
+                'ayahs'        => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_ayah`')->row['c'] ?? 0),
+                'translations' => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_translation`')->row['c'] ?? 0),
+                'reciters'     => (int) ($this->db->query('SELECT COUNT(*) AS c FROM `#__quran_reciter`')->row['c'] ?? 0),
+            ];
+        } catch (\Throwable) {
+            return ['surahs' => 0, 'ayahs' => 0, 'translations' => 0, 'reciters' => 0];
+        }
     }
 }

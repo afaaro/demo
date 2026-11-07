@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/media",
+    "description": "Channels, video/audio/image uploads, embeds, and a creator studio.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Media"
+    }
+}
