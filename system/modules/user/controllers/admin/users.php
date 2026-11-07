@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 use System\Engine\Controller;
-use System\Library\Paginator;
+use System\Library\Dataset;
 use System\Services\PermissionCatalog;
 use System\Services\User;
 use System\Services\UserAuthAudit;
@@ -24,95 +24,162 @@ class UserAdminUsers extends Controller
 
     public function indexAction(): void
     {
-        $page    = max(1, (int) $this->request->get('page', 'int', 1));
-        $perPage = 20;
-
-        $total = (int) $this->db->query("SELECT COUNT(*) FROM `#__users`")->value;
-        $totalPages = max(1, (int) ceil($total / $perPage));
-        $page   = min($page, $totalPages);
-        $offset = ($page - 1) * $perPage;
-
-        $users = $this->db->query(
-            "SELECT u.*,
-                    GROUP_CONCAT(g.name SEPARATOR ', ') AS `groups`
-               FROM `#__users` u
-               LEFT JOIN `#__user_group_members` m ON u.id = m.user_id
-               LEFT JOIN `#__user_groups` g ON m.group_id = g.id
-              GROUP BY u.id
-              ORDER BY u.created_at DESC
-              LIMIT {$perPage} OFFSET {$offset}"
-        )->rows;
-
-        $this->renderList($users, $page, $perPage, $total, $totalPages, '');
-    }
-
-    public function searchAction(): void
-    {
-        $q = trim((string) $this->request->get('q', 'string', ''));
-
-        if (strlen($q) < 2) {
-            redirect_to('user/admin/users');
-            return;
-        }
-
-        $users = $this->db->query(
-            "SELECT u.*,
-                    GROUP_CONCAT(g.name SEPARATOR ', ') AS `groups`
-               FROM `#__users` u
-               LEFT JOIN `#__user_group_members` m ON u.id = m.user_id
-               LEFT JOIN `#__user_groups` g ON m.group_id = g.id
-              WHERE u.username LIKE ? OR u.email LIKE ? OR u.display_name LIKE ?
-              GROUP BY u.id
-              ORDER BY u.created_at DESC
-              LIMIT 50",
-            ["%{$q}%", "%{$q}%", "%{$q}%"]
-        )->rows;
-
-        $this->renderList($users, 1, 50, count($users), 1, $q);
-    }
-
-    /**
-     * Shared renderer for index + search.
-     *
-     * @param array<int, array<string, mixed>> $users
-     */
-    private function renderList(
-        array $users,
-        int $page,
-        int $perPage,
-        int $total,
-        int $totalPages,
-        string $q
-    ): void {
         $sessions = new UserSessionService($this->db, $this->session);
         $sessions->prune();
         $onlineMap = $sessions->onlineUserIdMap();
         $onlineUsers = $sessions->onlineUsers();
 
-        echo $this->view->inline(function () use (
-            $users, $page, $perPage, $total, $totalPages, $q, $onlineMap, $onlineUsers
-        ) {
+        $dataset = (new Dataset($this->registry))
+            ->perPage(20)
+            ->searchPlaceholder('Search username, email or name…')
+            ->sortable(['username', 'email', 'status', 'created_at', 'last_seen_at'])
+            ->defaultSort('created_at', 'desc')
+            ->filter('status', 'select', [
+                ''          => 'All statuses',
+                'active'    => 'Active',
+                'pending'   => 'Pending',
+                'suspended' => 'Suspended',
+            ])
+            ->columns([
+                'username'   => 'Username',
+                'email'      => 'Email',
+                'groups'     => 'Groups',
+                'online'     => 'Online',
+                'status'     => 'Status',
+                'last_seen'  => 'Last seen',
+                'created_at' => 'Created',
+                'actions'    => '',
+            ])
+            ->query(function ($db, array $state): array {
+                [$whereSql, $params] = $this->usersListWhere($state);
+                $sortCol = $this->usersListSortColumn($state['sort']);
+                $dir = $state['dir'] === 'asc' ? 'ASC' : 'DESC';
+
+                $total = (int) ($db->query(
+                    "SELECT COUNT(DISTINCT u.id) AS total FROM `#__users` u{$whereSql}",
+                    $params
+                )->row['total'] ?? 0);
+
+                $listParams = $params;
+                $listParams[] = (int) $state['offset'];
+                $listParams[] = (int) $state['per_page'];
+
+                $rows = $db->query(
+                    "SELECT u.*,
+                            GROUP_CONCAT(g.name SEPARATOR ', ') AS `groups`
+                       FROM `#__users` u
+                       LEFT JOIN `#__user_group_members` m ON u.id = m.user_id
+                       LEFT JOIN `#__user_groups` g ON m.group_id = g.id
+                      {$whereSql}
+                      GROUP BY u.id
+                      ORDER BY u.`{$sortCol}` {$dir}
+                      LIMIT ?, ?",
+                    $listParams
+                )->rows;
+
+                return [
+                    'rows'  => is_array($rows) ? $rows : [],
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string => $this->view->e((string) $value);
+
+        $dataset->columns([
+            'username' => function (array $u) use ($e): string {
+                return $e((string) $u['username'])
+                    . '<br><span class="text-muted small">'
+                    . $e((string) ($u['display_name'] ?? ''))
+                    . '</span>';
+            },
+            'email' => fn(array $u): string => $e((string) $u['email']),
+            'groups' => function (array $u) use ($e): string {
+                $g = (string) ($u['groups'] ?? '');
+                return '<span class="text-muted small">' . $e($g !== '' ? $g : '—') . '</span>';
+            },
+            'online' => function (array $u) use ($onlineMap): string {
+                $uid = (int) $u['id'];
+                $isOnline = isset($onlineMap[$uid])
+                    || UserSessionService::isOnlineTimestamp(
+                        isset($u['last_seen_at']) ? (string) $u['last_seen_at'] : null
+                    );
+                if ($isOnline) {
+                    return '<span class="badge text-bg-success" title="Active session">'
+                        . '<i class="bi bi-circle-fill me-1" style="font-size:.55rem"></i>Online</span>';
+                }
+                return '<span class="text-muted small">Offline</span>';
+            },
+            'status' => function (array $u) use ($e): string {
+                $status = (string) ($u['status'] ?? 'active');
+                return match ($status) {
+                    'active'    => '<span class="badge text-bg-success">Active</span>',
+                    'pending'   => '<span class="badge text-bg-warning">Pending</span>',
+                    'suspended' => '<span class="badge text-bg-danger">Suspended</span>',
+                    default     => '<span class="badge text-bg-secondary">' . $e($status) . '</span>',
+                };
+            },
+            'last_seen' => function (array $u) use ($e): string {
+                $lastSeen = (string) ($u['last_seen_at'] ?? $u['last_login_at'] ?? '');
+                return '<span class="text-muted small">' . $e($lastSeen !== '' ? $lastSeen : '—') . '</span>';
+            },
+            'created_at' => function (array $u) use ($e): string {
+                return '<span class="text-muted small">' . $e((string) ($u['created_at'] ?? '')) . '</span>';
+            },
+            'actions' => function (array $u) use ($e): string {
+                $uid = (int) $u['id'];
+                $status = (string) ($u['status'] ?? 'active');
+                $html = '<div class="text-end text-nowrap">';
+                if ($status === 'pending') {
+                    $html .= '<form method="post" action="'
+                        . $e($this->url->to('user/admin/users/approve'))
+                        . '" class="d-inline">';
+                    $html .= $this->request->csrfField();
+                    $html .= '<input type="hidden" name="id" value="' . $uid . '">';
+                    $html .= '<button type="submit" class="btn btn-sm btn-success">Approve</button></form> ';
+                    $html .= '<form method="post" action="'
+                        . $e($this->url->to('user/admin/users/reject'))
+                        . '" class="d-inline" onsubmit="return confirm(\'Reject and delete this registration?\');">';
+                    $html .= $this->request->csrfField();
+                    $html .= '<input type="hidden" name="id" value="' . $uid . '">';
+                    $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Reject</button></form> ';
+                }
+                $html .= '<a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('user/admin/users/edit', ['id' => $uid]))
+                    . '">Edit</a> ';
+                $html .= '<form method="post" action="'
+                    . $e($this->url->to('user/admin/users/delete'))
+                    . '" class="d-inline" onsubmit="return confirm(\'Delete this user?\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<input type="hidden" name="id" value="' . $uid . '">';
+                $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
+                $html .= '</form></div>';
+                return $html;
+            },
+        ]);
+
+        $q = trim((string) $this->request->query('q', 'string', ''));
+
+        echo $this->view->inline(function () use ($dataset, $onlineUsers, $q, $e) {
             $this->view->assign('title', $q !== '' ? "Search: {$q}" : 'User Management');
             $this->view->block('right_sidebar', 'Users');
 
-            // ---- Header -----------------------------------------------------
             $pendingCount = (int) $this->db->query(
                 "SELECT COUNT(*) FROM `#__users` WHERE `status` = 'pending'"
             )->value;
             $onlineCount = count($onlineUsers);
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">';
-            echo '<h1 class="h3 mb-0">' . ($q !== '' ? 'Search: ' . $this->view->e($q) : 'Users') . '</h1>';
+            echo '<h1 class="h3 mb-0">' . ($q !== '' ? 'Search: ' . $e($q) : 'Users') . '</h1>';
             echo '<div class="d-flex flex-wrap gap-2 align-items-center">';
             echo '<span class="badge text-bg-' . ($onlineCount > 0 ? 'success' : 'secondary') . '">'
                . '<i class="bi bi-circle-fill me-1" style="font-size:.55rem"></i>'
                . $onlineCount . ' online</span>';
-            echo '<a href="' . $this->view->e($this->url->to('user/admin/users/pending')) . '"'
+            echo '<a href="' . $e($this->url->to('user/admin/users/pending')) . '"'
                . ' class="btn btn-outline-warning">'
                . '<i class="bi bi-hourglass-split me-1"></i>Pending'
                . ($pendingCount > 0 ? ' <span class="badge text-bg-warning">' . $pendingCount . '</span>' : '')
                . '</a>';
-            echo '<a href="' . $this->view->e($this->url->to('user/admin/users/add')) . '"'
+            echo '<a href="' . $e($this->url->to('user/admin/users/add')) . '"'
                . ' class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Add user</a>';
             echo '</div></div>';
 
@@ -126,123 +193,61 @@ class UserAdminUsers extends Controller
                     if ($ou['display_name'] !== '') {
                         $label .= ' (' . $ou['display_name'] . ')';
                     }
-                    $bits[] = $this->view->e($label);
+                    $bits[] = $e($label);
                 }
                 echo implode(', ', $bits) . '</div>';
             }
 
-            // ---- Search -----------------------------------------------------
-            echo '<form method="get"'
-               . ' action="' . $this->view->e($this->url->to('user/admin/users/search')) . '"'
-               . ' class="mb-3">';
-            echo '<div class="input-group">';
-            echo '<input type="search" name="q" class="form-control"'
-               . ' placeholder="Search username, email or name…"'
-               . ' value="' . $this->view->e($q) . '">';
-            echo '<button type="submit" class="btn btn-outline-secondary">Search</button>';
-            if ($q !== '') {
-                echo '<a class="btn btn-outline-secondary" href="'
-                   . $this->view->e($this->url->to('user/admin/users')) . '">Clear</a>';
-            }
-            echo '</div>';
-            echo '</form>';
-
-            // ---- Empty ------------------------------------------------------
-            if (empty($users)) {
-                echo '<div class="alert alert-info">'
-                   . ($q !== '' ? 'No users matched your search.' : 'No users yet.')
-                   . '</div>';
-                return;
-            }
-
-            // ---- Table ------------------------------------------------------
-            echo '<div class="table-responsive"><table class="table table-striped align-middle">';
-            echo '<thead><tr>'
-               . '<th>Username</th><th>Email</th><th>Groups</th>'
-               . '<th class="text-center">Online</th>'
-               . '<th class="text-center">Status</th>'
-               . '<th>Last seen</th><th>Created</th><th></th>'
-               . '</tr></thead><tbody>';
-
-            foreach ($users as $u) {
-                $uid    = (int) $u['id'];
-                $status = (string) ($u['status'] ?? 'active');
-                $isOnline = isset($onlineMap[$uid])
-                    || UserSessionService::isOnlineTimestamp(
-                        isset($u['last_seen_at']) ? (string) $u['last_seen_at'] : null
-                    );
-                $lastSeen = (string) ($u['last_seen_at'] ?? $u['last_login_at'] ?? '');
-
-                echo '<tr>';
-                echo '<td>' . $this->view->e((string) $u['username']) . '<br>'
-                   . '<span class="text-muted small">'
-                   . $this->view->e((string) ($u['display_name'] ?? '')) . '</span></td>';
-                echo '<td>' . $this->view->e((string) $u['email']) . '</td>';
-                echo '<td class="text-muted small">'
-                   . $this->view->e((string) ($u['groups'] ?? '—')) . '</td>';
-
-                echo '<td class="text-center">';
-                if ($isOnline) {
-                    echo '<span class="badge text-bg-success" title="Active session">'
-                       . '<i class="bi bi-circle-fill me-1" style="font-size:.55rem"></i>Online</span>';
-                } else {
-                    echo '<span class="text-muted small">Offline</span>';
-                }
-                echo '</td>';
-
-                echo '<td class="text-center">';
-                echo match ($status) {
-                    'active'    => '<span class="badge text-bg-success">Active</span>',
-                    'pending'   => '<span class="badge text-bg-warning">Pending</span>',
-                    'suspended' => '<span class="badge text-bg-danger">Suspended</span>',
-                    default     => '<span class="badge text-bg-secondary">'
-                                 . $this->view->e($status) . '</span>',
-                };
-                echo '</td>';
-
-                echo '<td class="text-muted small">'
-                   . $this->view->e($lastSeen !== '' ? $lastSeen : '—') . '</td>';
-                echo '<td class="text-muted small">'
-                   . $this->view->e((string) ($u['created_at'] ?? '')) . '</td>';
-
-                echo '<td class="text-end text-nowrap">';
-                if ($status === 'pending') {
-                    echo '<form method="post" action="'
-                       . $this->view->e($this->url->to('user/admin/users/approve'))
-                       . '" class="d-inline">';
-                    echo $this->request->csrfField();
-                    echo '<input type="hidden" name="id" value="' . $uid . '">';
-                    echo '<button type="submit" class="btn btn-sm btn-success">Approve</button></form> ';
-                    echo '<form method="post" action="'
-                       . $this->view->e($this->url->to('user/admin/users/reject'))
-                       . '" class="d-inline" onsubmit="return confirm(\'Reject and delete this registration?\');">';
-                    echo $this->request->csrfField();
-                    echo '<input type="hidden" name="id" value="' . $uid . '">';
-                    echo '<button type="submit" class="btn btn-sm btn-outline-danger">Reject</button></form> ';
-                }
-                echo '<a class="btn btn-sm btn-outline-secondary" href="'
-                   . $this->view->e($this->url->to('user/admin/users/edit', ['id' => $uid])) . '">'
-                   . 'Edit</a> ';
-                echo '<form method="post"'
-                   . ' action="' . $this->view->e($this->url->to('user/admin/users/delete')) . '"'
-                   . ' class="d-inline"'
-                   . ' onsubmit="return confirm(\'Delete this user?\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="id" value="' . $uid . '">';
-                echo '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
-                echo '</form>';
-                echo '</td></tr>';
-            }
-
-            echo '</tbody></table></div>';
-
-            if ($q === '') {
-                echo Paginator::make($total, $page, $perPage)->render(
-                    fn (int $p) => $this->url->to('user/admin/users', ['page' => $p]),
-                    ['theme' => 'bootstrap']
-                );
-            }
+            echo $dataset->render();
         });
+    }
+
+    public function searchAction(): void
+    {
+        $q = trim((string) $this->request->get('q', 'string', ''));
+        $params = $q !== '' ? ['q' => $q] : [];
+        redirect_to('user/admin/users', $params);
+    }
+
+    /**
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private function usersListWhere(array $state): array
+    {
+        $clauses = [];
+        $params = [];
+
+        if ($state['q'] !== '') {
+            $needle = $this->likeNeedle($state['q']);
+            $clauses[] = '(u.username LIKE ? ESCAPE \'\\\\\' OR u.email LIKE ? ESCAPE \'\\\\\' OR u.display_name LIKE ? ESCAPE \'\\\\\')';
+            $params[] = $needle;
+            $params[] = $needle;
+            $params[] = $needle;
+        }
+
+        $status = (string) ($state['filters']['status'] ?? '');
+        if ($status !== '' && in_array($status, ['active', 'pending', 'suspended'], true)) {
+            $clauses[] = 'u.status = ?';
+            $params[] = $status;
+        }
+
+        if ($clauses === []) {
+            return ['', []];
+        }
+
+        return [' WHERE ' . implode(' AND ', $clauses), $params];
+    }
+
+    private function usersListSortColumn(string $sort): string
+    {
+        $allowed = ['username', 'email', 'status', 'created_at', 'last_seen_at'];
+        return in_array($sort, $allowed, true) ? $sort : 'created_at';
+    }
+
+    private function likeNeedle(string $q): string
+    {
+        $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q);
+        return '%' . $escaped . '%';
     }
 
     // =========================================================================

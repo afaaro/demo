@@ -132,14 +132,14 @@ class StoreFeederAdminTenants extends Controller
             }
 
             if ($isPlatform) {
-                $ebayReady = \Module\StoreFeeder\Services\Channels\Ebay\EbayPlatformApp::isConfigured(false);
+                $ebayReady = \Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayPlatformApp::isConfigured(false);
                 if ($ebayReady) {
                     echo '<div class="alert alert-success py-2 small mb-3">eBay platform app is configured — '
                        . 'tenants can <strong>Link account</strong> (consent only), no App ID / Cert ID on the channel.</div>';
                 } else {
                     echo '<div class="alert alert-warning py-2 small mb-3">eBay consent-only Connect is not ready. '
                        . 'Set <code>storefeeder.ebay</code> (<code>client_id</code>, <code>client_secret</code>, '
-                       . '<code>ru_name</code>) in <code>system/config/storefeeder.php</code>. '
+                       . '<code>ru_name</code>) in <code>modules/storefeeder/config/ebay.php</code>. '
                        . 'RuName must point at <code>…/storefeeder/admin/channels/callback</code>.</div>';
                 }
             }

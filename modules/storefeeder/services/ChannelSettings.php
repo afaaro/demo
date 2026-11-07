@@ -77,9 +77,21 @@ final class ChannelSettings
             self::$defaultsCache = [];
         }
 
-        $file = __DIR__ . '/channels/' . $type . '/config.php';
-        $out  = [];
-        if (is_file($file)) {
+        $file = null;
+        foreach (['marketplace', 'courier', 'webstore'] as $category) {
+            $candidate = __DIR__ . '/channels/' . $category . '/' . $type . '/config.php';
+            if (is_file($candidate)) {
+                $file = $candidate;
+                break;
+            }
+        }
+        if ($file === null) {
+            $legacy = __DIR__ . '/channels/' . $type . '/config.php';
+            $file = is_file($legacy) ? $legacy : null;
+        }
+
+        $out = [];
+        if ($file !== null) {
             $config = include $file;
             if (is_array($config) && is_array($config['settings'] ?? null)) {
                 foreach ($config['settings'] as $name => $def) {

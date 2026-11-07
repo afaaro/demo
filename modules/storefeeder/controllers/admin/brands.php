@@ -4,6 +4,7 @@ declare(strict_types=1);
 use Module\StoreFeeder\Services\BrandRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminBrands extends Controller
 {
@@ -19,20 +20,101 @@ class StoreFeederAdminBrands extends Controller
 
     public function indexAction(): void
     {
-        $q = trim((string) $this->request->get('q', 'string', ''));
-        $activeFilter = trim((string) $this->request->get('active', 'string', ''));
-        $activeOnly = match ($activeFilter) {
-            '1' => true,
-            '0' => false,
-            default => null,
-        };
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->searchPlaceholder('Name, website, notes…')
+            ->sortable(['name', 'website', 'product_count', 'active'])
+            ->defaultSort('name', 'asc')
+            ->filter('active', 'select', [
+                ''  => 'All statuses',
+                '1' => 'Active',
+                '0' => 'Inactive',
+            ])
+            ->columns([
+                'name'          => 'Brand',
+                'website'       => 'Website',
+                'product_count' => 'Products',
+                'active'        => 'Status',
+                'actions'       => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $activeFilter = (string) ($state['filters']['active'] ?? '');
+                $activeOnly = match ($activeFilter) {
+                    '1' => true,
+                    '0' => false,
+                    default => null,
+                };
 
-        $rows = $this->brands->all($q, $activeOnly);
+                $rows = $this->brands->all($state['q'], $activeOnly);
+                $rows = $this->sortListRows($rows, $state['sort'], $state['dir'], [
+                    'product_count' => 'int',
+                    'active'        => 'bool',
+                ]);
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows, $q, $activeFilter) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string => $this->view->e((string) $value);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $html = '<span class="fw-semibold' . (!$item['active'] ? ' text-muted' : '') . '">'
+                    . $e($item['name']) . '</span>';
+                if ($item['notes'] !== '') {
+                    $html .= '<div class="small text-muted">'
+                        . $e(mb_strimwidth((string) $item['notes'], 0, 80, '…')) . '</div>';
+                }
+                return $html;
+            },
+            'website' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                if ($item['website'] === '') {
+                    return '<span class="text-muted">—</span>';
+                }
+                $href = $this->externalUrl((string) $item['website']);
+                return '<a class="small" href="' . $e($href) . '" target="_blank" rel="noopener">'
+                    . $e($item['website']) . '</a>';
+            },
+            'product_count' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['product_count'];
+                if ($count <= 0) {
+                    return '<span class="text-end d-block">0</span>';
+                }
+                $url = $this->url->to('storefeeder/admin/products', ['f_brand' => $item['name']]);
+                return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+            },
+            'active' => function (array $row): string {
+                $item = $row['_row'];
+                return $item['active']
+                    ? '<span class="badge text-bg-success">Active</span>'
+                    : '<span class="badge text-bg-secondary">Inactive</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $id = (int) $item['id'];
+                $html = '<div class="text-end text-nowrap">';
+                $html .= '<a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('storefeeder/admin/brands/edit', ['id' => $id]))
+                    . '">Edit</a> ';
+                $html .= '<form method="post" class="d-inline" action="'
+                    . $e($this->url->to('storefeeder/admin/brands/delete', ['id' => $id])) . '"'
+                    . ' onsubmit="return confirm(\'Delete this brand? Products using it will have brand cleared.\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
+                return $html . '</form></div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Brands');
             $this->view->block('right_sidebar', 'Brands');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">';
             echo '<div><h1 class="h3 mb-1"><i class="bi bi-award me-1"></i>Brands</h1>'
@@ -53,77 +135,7 @@ class StoreFeederAdminBrands extends Controller
             echo '</form></div></div>';
 
             echo '<div class="col-lg-8">';
-            echo '<form method="get" class="row g-2 align-items-end mb-3" action="'
-               . $e($this->url->to('storefeeder/admin/brands')) . '">';
-            echo '<div class="col-md-6"><label class="form-label small mb-1">Search</label>'
-               . '<input type="search" name="q" class="form-control" value="' . $e($q) . '"'
-               . ' placeholder="Name, website, notes…"></div>';
-            echo '<div class="col-md-3"><label class="form-label small mb-1">Status</label>'
-               . '<select name="active" class="form-select">';
-            foreach (['' => 'All', '1' => 'Active', '0' => 'Inactive'] as $val => $label) {
-                $sel = $activeFilter === $val ? ' selected' : '';
-                echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
-            }
-            echo '</select></div>';
-            echo '<div class="col-auto"><button class="btn btn-outline-secondary" type="submit">Apply</button>';
-            if ($q !== '' || $activeFilter !== '') {
-                echo ' <a class="btn btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/brands')) . '">Reset</a>';
-            }
-            echo '</div></form>';
-
-            if ($rows === []) {
-                echo '<div class="alert alert-info mb-0">No brands found.</div>';
-            } else {
-                echo '<div class="small text-muted mb-2">' . count($rows) . ' brand(s)</div>';
-                echo '<div class="table-responsive border rounded">';
-                echo '<table class="table table-sm table-hover align-middle mb-0">';
-                echo '<thead class="table-light"><tr>'
-                   . '<th>Brand</th><th>Website</th>'
-                   . '<th class="text-end">Products</th><th>Status</th><th></th>'
-                   . '</tr></thead><tbody>';
-                foreach ($rows as $row) {
-                    $id = (int) $row['id'];
-                    $name = (string) $row['name'];
-                    $productsUrl = $this->url->to('storefeeder/admin/products', ['f_brand' => $name]);
-                    echo '<tr' . (!$row['active'] ? ' class="table-secondary"' : '') . '>';
-                    echo '<td><span class="fw-semibold">' . $e($name) . '</span>';
-                    if ($row['notes'] !== '') {
-                        echo '<div class="small text-muted">' . $e(mb_strimwidth($row['notes'], 0, 80, '…')) . '</div>';
-                    }
-                    echo '</td>';
-                    echo '<td class="small">';
-                    if ($row['website'] !== '') {
-                        $href = $this->externalUrl($row['website']);
-                        echo '<a href="' . $e($href) . '" target="_blank" rel="noopener">'
-                           . $e($row['website']) . '</a>';
-                    } else {
-                        echo '<span class="text-muted">—</span>';
-                    }
-                    echo '</td>';
-                    echo '<td class="text-end">';
-                    if ((int) $row['product_count'] > 0) {
-                        echo '<a href="' . $e($productsUrl) . '">' . (int) $row['product_count'] . '</a>';
-                    } else {
-                        echo '0';
-                    }
-                    echo '</td>';
-                    echo '<td>' . ($row['active']
-                        ? '<span class="badge text-bg-success">Active</span>'
-                        : '<span class="badge text-bg-secondary">Inactive</span>') . '</td>';
-                    echo '<td class="text-end text-nowrap">';
-                    echo '<a class="btn btn-sm btn-outline-secondary" href="'
-                       . $e($this->url->to('storefeeder/admin/brands/edit', ['id' => $id]))
-                       . '">Edit</a> ';
-                    echo '<form method="post" class="d-inline" action="'
-                       . $e($this->url->to('storefeeder/admin/brands/delete', ['id' => $id])) . '"'
-                       . ' onsubmit="return confirm(\'Delete this brand? Products using it will have brand cleared.\');">';
-                    echo $this->request->csrfField();
-                    echo '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
-                    echo '</form></td></tr>';
-                }
-                echo '</tbody></table></div>';
-            }
+            echo $dataset->render();
             echo '</div></div>';
         });
     }
@@ -258,6 +270,29 @@ class StoreFeederAdminBrands extends Controller
             'notes'    => trim((string) $this->request->post('notes', 'string', '')),
             'active'   => (int) $this->request->post('active', 'int', 0) === 1,
         ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $types
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortListRows(array $rows, string $sort, string $dir, array $types = []): array
+    {
+        $mult = strtolower($dir) === 'desc' ? -1 : 1;
+        usort($rows, function (array $a, array $b) use ($sort, $mult, $types): int {
+            $va = $a[$sort] ?? '';
+            $vb = $b[$sort] ?? '';
+            $kind = $types[$sort] ?? 'string';
+            if ($kind === 'int') {
+                return $mult * ((int) $va <=> (int) $vb);
+            }
+            if ($kind === 'bool') {
+                return $mult * ((int) (bool) $va <=> (int) (bool) $vb);
+            }
+            return $mult * strcasecmp((string) $va, (string) $vb);
+        });
+        return $rows;
     }
 
     private function externalUrl(string $url): string

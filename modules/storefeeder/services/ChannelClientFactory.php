@@ -8,6 +8,9 @@ use RuntimeException;
 
 final class ChannelClientFactory
 {
+    /** Category folders under services/channels/ that hold provider packages. */
+    private const CATEGORY_DIRS = ['marketplace', 'courier', 'webstore'];
+
     /** @var array<string, array>|null */
     private ?array $typesCache = null;
 
@@ -39,13 +42,13 @@ final class ChannelClientFactory
         $creds = $this->vault->open($channel->credentials);
         if ($type === 'ebay') {
             $sandbox = !empty($channel->settings['sandbox']);
-            $creds = \Module\StoreFeeder\Services\Channels\Ebay\EbayPlatformApp::merge(
+            $creds = \Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayPlatformApp::merge(
                 is_array($creds) ? $creds : [],
                 $sandbox,
                 !empty($channel->settings['custom_ebay_app']),
             );
         } elseif ($type === 'amazon') {
-            $creds = \Module\StoreFeeder\Services\Channels\Amazon\AmazonPlatformApp::merge(
+            $creds = \Module\StoreFeeder\Services\Channels\Marketplace\Amazon\AmazonPlatformApp::merge(
                 is_array($creds) ? $creds : [],
                 !empty($channel->settings['custom_amazon_app']),
             );
@@ -95,19 +98,7 @@ final class ChannelClientFactory
             return $this->typesCache = $out;
         }
 
-        $entries = scandir($base) ?: [];
-        sort($entries, SORT_STRING | SORT_FLAG_CASE);
-
-        foreach ($entries as $dir) {
-            if ($dir === '.' || $dir === '..') {
-                continue;
-            }
-
-            $dirPath = $base . '/' . $dir;
-            if (!is_dir($dirPath)) {
-                continue;
-            }
-
+        foreach ($this->providerRoots($base) as $dirPath) {
             $configFile = $dirPath . '/config.php';
             if (!is_file($configFile)) {
                 continue;
@@ -118,19 +109,92 @@ final class ChannelClientFactory
                 continue;
             }
 
-            // Prefer an explicit 'type' key from the config; fall back to
-            // the directory name so existing folders keep working.
+            $dir = basename($dirPath);
             $key = strtolower((string) ($config['type'] ?? $dir));
 
             if (isset($out[$key])) {
                 throw new RuntimeException(
-                    "Duplicate channel type '{$key}' (folder '{$dir}')."
+                    "Duplicate channel type '{$key}' (folder '{$dirPath}')."
                 );
             }
 
             $out[$key] = $config;
         }
 
+        ksort($out, SORT_STRING | SORT_FLAG_CASE);
+
         return $this->typesCache = $out;
+    }
+
+    /**
+     * Provider package roots: channels/{marketplace|courier|webstore}/{type}
+     * and legacy channels/{type} if any remain.
+     *
+     * @return list<string>
+     */
+    private function providerRoots(string $base): array
+    {
+        $roots = [];
+
+        foreach (self::CATEGORY_DIRS as $category) {
+            $categoryPath = $base . '/' . $category;
+            if (!is_dir($categoryPath)) {
+                continue;
+            }
+            foreach ($this->childDirectories($categoryPath) as $dirPath) {
+                $roots[] = $dirPath;
+            }
+        }
+
+        // Legacy flat layout (channels/{type}/config.php) for any leftovers.
+        foreach ($this->childDirectories($base) as $dirPath) {
+            $name = basename($dirPath);
+            if (in_array($name, self::CATEGORY_DIRS, true)) {
+                continue;
+            }
+            $roots[] = $dirPath;
+        }
+
+        return $roots;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function childDirectories(string $parent): array
+    {
+        $entries = scandir($parent) ?: [];
+        sort($entries, SORT_STRING | SORT_FLAG_CASE);
+        $out = [];
+        foreach ($entries as $dir) {
+            if ($dir === '.' || $dir === '..') {
+                continue;
+            }
+            $dirPath = $parent . '/' . $dir;
+            if (is_dir($dirPath)) {
+                $out[] = $dirPath;
+            }
+        }
+        return $out;
+    }
+
+    /** Absolute path to a provider config.php, or null. */
+    public function configPathForType(string $type): ?string
+    {
+        $type = strtolower(trim($type));
+        if ($type === '') {
+            return null;
+        }
+
+        $base = __DIR__ . '/channels';
+        foreach (self::CATEGORY_DIRS as $category) {
+            $file = $base . '/' . $category . '/' . $type . '/config.php';
+            if (is_file($file)) {
+                return $file;
+            }
+        }
+
+        $legacy = $base . '/' . $type . '/config.php';
+        return is_file($legacy) ? $legacy : null;
     }
 }

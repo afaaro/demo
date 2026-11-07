@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 namespace Module\StoreFeeder\Services;
 
-use Module\StoreFeeder\Services\Channels\Amazon\AmazonChannelClient;
-use Module\StoreFeeder\Services\Channels\Ebay\EbayChannelClient;
+use Module\StoreFeeder\Services\Channels\Marketplace\Amazon\AmazonChannelClient;
+use Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayChannelClient;
 use RuntimeException;
 use System\Library\Database;
 

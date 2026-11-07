@@ -4,6 +4,7 @@ declare(strict_types=1);
 use Module\StoreFeeder\Services\SupplierRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminSuppliers extends Controller
 {
@@ -19,20 +20,115 @@ class StoreFeederAdminSuppliers extends Controller
 
     public function indexAction(): void
     {
-        $q = trim((string) $this->request->get('q', 'string', ''));
-        $activeFilter = trim((string) $this->request->get('active', 'string', ''));
-        $activeOnly = match ($activeFilter) {
-            '1' => true,
-            '0' => false,
-            default => null,
-        };
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->searchPlaceholder('Name, contact, email…')
+            ->sortable(['name', 'lead_time_days', 'product_count', 'po_count', 'active'])
+            ->defaultSort('name', 'asc')
+            ->filter('active', 'select', [
+                ''  => 'All statuses',
+                '1' => 'Active',
+                '0' => 'Inactive',
+            ])
+            ->columns([
+                'name'           => 'Supplier',
+                'contact'        => 'Contact',
+                'lead_time_days' => 'Lead days',
+                'product_count'  => 'Products',
+                'po_count'       => 'POs',
+                'active'         => 'Status',
+                'actions'        => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $activeFilter = (string) ($state['filters']['active'] ?? '');
+                $activeOnly = match ($activeFilter) {
+                    '1' => true,
+                    '0' => false,
+                    default => null,
+                };
 
-        $rows = $this->suppliers->all($q, $activeOnly);
+                $rows = $this->suppliers->all($state['q'], $activeOnly);
+                $rows = $this->sortListRows($rows, $state['sort'], $state['dir'], [
+                    'lead_time_days' => 'int',
+                    'product_count'  => 'int',
+                    'po_count'       => 'int',
+                    'active'         => 'bool',
+                ]);
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows, $q, $activeFilter) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string => $this->view->e((string) $value);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $html = '<span class="fw-semibold' . (!$item['active'] ? ' text-muted' : '') . '">'
+                    . $e($item['name']) . '</span>';
+                if ($item['company'] !== '' && $item['company'] !== $item['name']) {
+                    $html .= '<div class="small text-muted">' . $e($item['company']) . '</div>';
+                }
+                return $html;
+            },
+            'contact' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $bits = array_filter([$item['contact_name'], $item['email'], $item['phone']]);
+                return $bits !== []
+                    ? '<span class="small">' . $e(implode(' · ', $bits)) . '</span>'
+                    : '<span class="text-muted">—</span>';
+            },
+            'lead_time_days' => function (array $row): string {
+                $days = (int) $row['_row']['lead_time_days'];
+                return '<span class="text-end d-block">' . ($days > 0 ? (string) $days : '—') . '</span>';
+            },
+            'product_count' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['product_count'];
+                if ($count <= 0) {
+                    return '<span class="text-end d-block">0</span>';
+                }
+                $url = $this->url->to('storefeeder/admin/products', ['f_supplier' => $item['name']]);
+                return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+            },
+            'po_count' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['po_count'];
+                if ($count <= 0) {
+                    return '<span class="text-end d-block">0</span>';
+                }
+                $url = $this->url->to('storefeeder/admin/purchase-orders', ['supplier' => $item['name']]);
+                return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+            },
+            'active' => function (array $row): string {
+                $item = $row['_row'];
+                return $item['active']
+                    ? '<span class="badge text-bg-success">Active</span>'
+                    : '<span class="badge text-bg-secondary">Inactive</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $id = (int) $item['id'];
+                $html = '<div class="text-end text-nowrap">';
+                $html .= '<a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('storefeeder/admin/suppliers/edit', ['id' => $id]))
+                    . '">Edit</a> ';
+                $html .= '<form method="post" class="d-inline" action="'
+                    . $e($this->url->to('storefeeder/admin/suppliers/delete', ['id' => $id])) . '"'
+                    . ' onsubmit="return confirm(\'Delete this supplier? Products using it will have supplier cleared.\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
+                return $html . '</form></div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Suppliers');
             $this->view->block('right_sidebar', 'Suppliers');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">';
             echo '<div><h1 class="h3 mb-1"><i class="bi bi-truck me-1"></i>Suppliers</h1>'
@@ -51,79 +147,7 @@ class StoreFeederAdminSuppliers extends Controller
             echo '</form></div></div>';
 
             echo '<div class="col-lg-8">';
-            echo '<form method="get" class="row g-2 align-items-end mb-3" action="'
-               . $e($this->url->to('storefeeder/admin/suppliers')) . '">';
-            echo '<div class="col-md-6"><label class="form-label small mb-1">Search</label>'
-               . '<input type="search" name="q" class="form-control" value="' . $e($q) . '"'
-               . ' placeholder="Name, contact, email…"></div>';
-            echo '<div class="col-md-3"><label class="form-label small mb-1">Status</label>'
-               . '<select name="active" class="form-select">';
-            foreach (['' => 'All', '1' => 'Active', '0' => 'Inactive'] as $val => $label) {
-                $sel = $activeFilter === $val ? ' selected' : '';
-                echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
-            }
-            echo '</select></div>';
-            echo '<div class="col-auto"><button class="btn btn-outline-secondary" type="submit">Apply</button>';
-            if ($q !== '' || $activeFilter !== '') {
-                echo ' <a class="btn btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/suppliers')) . '">Reset</a>';
-            }
-            echo '</div></form>';
-
-            if ($rows === []) {
-                echo '<div class="alert alert-info mb-0">No suppliers found.</div>';
-            } else {
-                echo '<div class="small text-muted mb-2">' . count($rows) . ' supplier(s)</div>';
-                echo '<div class="table-responsive border rounded">';
-                echo '<table class="table table-sm table-hover align-middle mb-0">';
-                echo '<thead class="table-light"><tr>'
-                   . '<th>Supplier</th><th>Contact</th><th class="text-end">Lead days</th>'
-                   . '<th class="text-end">Products</th><th class="text-end">POs</th><th>Status</th><th></th>'
-                   . '</tr></thead><tbody>';
-                foreach ($rows as $row) {
-                    $id = (int) $row['id'];
-                    $name = (string) $row['name'];
-                    $productsUrl = $this->url->to('storefeeder/admin/products', ['f_supplier' => $name]);
-                    $poUrl = $this->url->to('storefeeder/admin/purchase-orders', ['supplier' => $name]);
-                    echo '<tr' . (!$row['active'] ? ' class="table-secondary"' : '') . '>';
-                    echo '<td><span class="fw-semibold">' . $e($name) . '</span>';
-                    if ($row['company'] !== '' && $row['company'] !== $name) {
-                        echo '<div class="small text-muted">' . $e($row['company']) . '</div>';
-                    }
-                    echo '</td>';
-                    echo '<td class="small">';
-                    $bits = array_filter([$row['contact_name'], $row['email'], $row['phone']]);
-                    echo $bits !== [] ? $e(implode(' · ', $bits)) : '<span class="text-muted">—</span>';
-                    echo '</td>';
-                    echo '<td class="text-end">'
-                       . ((int) $row['lead_time_days'] > 0 ? (int) $row['lead_time_days'] : '—')
-                       . '</td>';
-                    echo '<td class="text-end">';
-                    echo (int) $row['product_count'] > 0
-                        ? '<a href="' . $e($productsUrl) . '">' . (int) $row['product_count'] . '</a>'
-                        : '0';
-                    echo '</td>';
-                    echo '<td class="text-end">';
-                    echo (int) $row['po_count'] > 0
-                        ? '<a href="' . $e($poUrl) . '">' . (int) $row['po_count'] . '</a>'
-                        : '0';
-                    echo '</td>';
-                    echo '<td>' . ($row['active']
-                        ? '<span class="badge text-bg-success">Active</span>'
-                        : '<span class="badge text-bg-secondary">Inactive</span>') . '</td>';
-                    echo '<td class="text-end text-nowrap">';
-                    echo '<a class="btn btn-sm btn-outline-secondary" href="'
-                       . $e($this->url->to('storefeeder/admin/suppliers/edit', ['id' => $id]))
-                       . '">Edit</a> ';
-                    echo '<form method="post" class="d-inline" action="'
-                       . $e($this->url->to('storefeeder/admin/suppliers/delete', ['id' => $id])) . '"'
-                       . ' onsubmit="return confirm(\'Delete this supplier? Products using it will have supplier cleared.\');">';
-                    echo $this->request->csrfField();
-                    echo '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
-                    echo '</form></td></tr>';
-                }
-                echo '</tbody></table></div>';
-            }
+            echo $dataset->render();
             echo '</div></div>';
         });
     }
@@ -327,6 +351,29 @@ class StoreFeederAdminSuppliers extends Controller
             'notes'          => trim((string) $this->request->post('notes', 'string', '')),
             'active'         => (int) $this->request->post('active', 'int', 0) === 1,
         ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $types
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortListRows(array $rows, string $sort, string $dir, array $types = []): array
+    {
+        $mult = strtolower($dir) === 'desc' ? -1 : 1;
+        usort($rows, function (array $a, array $b) use ($sort, $mult, $types): int {
+            $va = $a[$sort] ?? '';
+            $vb = $b[$sort] ?? '';
+            $kind = $types[$sort] ?? 'string';
+            if ($kind === 'int') {
+                return $mult * ((int) $va <=> (int) $vb);
+            }
+            if ($kind === 'bool') {
+                return $mult * ((int) (bool) $va <=> (int) (bool) $vb);
+            }
+            return $mult * strcasecmp((string) $va, (string) $vb);
+        });
+        return $rows;
     }
 
     private function guardCsrf(): void

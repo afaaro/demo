@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use System\Engine\Controller;
+use System\Library\Dataset;
 use System\Services\PermissionCatalog;
 use System\Services\User;
 use System\Services\UserAuthAudit;
@@ -27,15 +28,97 @@ class UserAdminGroups extends Controller
 
     public function indexAction(): void
     {
-        $groups = $this->db->query(
-            "SELECT g.*, COUNT(DISTINCT m.user_id) AS member_count
-               FROM #__user_groups g
-               LEFT JOIN #__user_group_members m ON m.group_id = g.id
-              GROUP BY g.id
-              ORDER BY g.name"
-        )->rows;
+        $dataset = (new Dataset($this->registry))
+            ->perPage(50)
+            ->searchPlaceholder('Search name, label or description…')
+            ->sortable(['name', 'label', 'member_count'])
+            ->defaultSort('name', 'asc')
+            ->columns([
+                'name'          => 'Name',
+                'label'         => 'Label',
+                'description'   => 'Description',
+                'member_count'  => 'Members',
+                'actions'       => '',
+            ])
+            ->query(function ($db, array $state): array {
+                [$whereSql, $params] = $this->groupsListWhere($state);
+                $sortCol = $this->groupsListSortColumn($state['sort']);
+                $dir = $state['dir'] === 'asc' ? 'ASC' : 'DESC';
+                $orderExpr = $sortCol === 'member_count'
+                    ? 'member_count'
+                    : "g.`{$sortCol}`";
 
-        echo $this->view->inline(function () use ($groups) {
+                $total = (int) ($db->query(
+                    "SELECT COUNT(*) AS total FROM `#__user_groups` g{$whereSql}",
+                    $params
+                )->row['total'] ?? 0);
+
+                $listParams = $params;
+                $listParams[] = (int) $state['offset'];
+                $listParams[] = (int) $state['per_page'];
+
+                $rows = $db->query(
+                    "SELECT g.*, COUNT(DISTINCT m.user_id) AS member_count
+                       FROM `#__user_groups` g
+                       LEFT JOIN `#__user_group_members` m ON m.group_id = g.id
+                      {$whereSql}
+                      GROUP BY g.id
+                      ORDER BY {$orderExpr} {$dir}
+                      LIMIT ?, ?",
+                    $listParams
+                )->rows;
+
+                return [
+                    'rows'  => is_array($rows) ? $rows : [],
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string => $this->view->e((string) $value);
+
+        $dataset->columns([
+            'name' => function (array $g) use ($e): string {
+                $html = '<code>' . $e((string) $g['name']) . '</code>';
+                if (!empty($g['is_system'])) {
+                    $html .= ' <span class="badge text-bg-primary">System</span>';
+                }
+                return $html;
+            },
+            'label' => fn(array $g): string => $e((string) ($g['label'] ?? '')),
+            'description' => function (array $g) use ($e): string {
+                return '<span class="text-muted small">' . $e((string) ($g['description'] ?? '')) . '</span>';
+            },
+            'member_count' => function (array $g): string {
+                return '<span class="text-end d-block">' . (int) ($g['member_count'] ?? 0) . '</span>';
+            },
+            'actions' => function (array $g) use ($e): string {
+                $id = (int) $g['id'];
+                $isSystem = !empty($g['is_system']);
+                $html = '<div class="text-end text-nowrap">';
+                $html .= '<a href="' . $e($this->url->to('user/admin/groups/edit', ['id' => $id])) . '"'
+                    . ' class="btn btn-sm btn-outline-secondary">Edit</a> ';
+                $html .= '<form method="post" action="' . $e($this->url->to('user/admin/groups/clone')) . '"'
+                    . ' class="d-inline"'
+                    . ' onsubmit="return confirm(\'Clone this group (permissions only, no members)?\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<input type="hidden" name="id" value="' . $id . '">';
+                $html .= '<button type="submit" class="btn btn-sm btn-outline-primary">Clone</button>';
+                $html .= '</form>';
+                if (!$isSystem) {
+                    $html .= ' <form method="post" action="' . $e($this->url->to('user/admin/groups/delete')) . '"'
+                        . ' class="d-inline"'
+                        . ' onsubmit="return confirm(\'Delete this group?\');">';
+                    $html .= $this->request->csrfField();
+                    $html .= '<input type="hidden" name="id" value="' . $id . '">';
+                    $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
+                    $html .= '</form>';
+                }
+                $html .= '</div>';
+                return $html;
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Group Management');
             $this->view->block('right_sidebar', 'Group Management');
 
@@ -45,69 +128,51 @@ class UserAdminGroups extends Controller
             echo '<h1 class="h3 mb-0">Group Management</h1>';
             if ($defaultGroup !== '') {
                 echo '<p class="text-muted small mb-0">New registrations join group '
-                   . '<code>' . $this->view->e($defaultGroup) . '</code>'
+                   . '<code>' . $e($defaultGroup) . '</code>'
                    . ' (config <code>user.default_group</code>)</p>';
             }
             echo '</div>';
-            echo '<a href="' . $this->view->e($this->url->to('user/admin/groups/add')) . '"'
+            echo '<a href="' . $e($this->url->to('user/admin/groups/add')) . '"'
                . ' class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Add group</a>';
             echo '</div>';
 
-            if (empty($groups)) {
-                echo '<div class="alert alert-info">No groups defined yet.</div>';
-                return;
-            }
-
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-striped align-middle">';
-            echo '<thead><tr>'
-               . '<th>Name</th><th>Label</th><th>Description</th>'
-               . '<th class="text-end">Members</th><th></th>'
-               . '</tr></thead><tbody>';
-
-            foreach ($groups as $g) {
-                $id       = (int) $g['id'];
-                $isSystem = !empty($g['is_system']);
-
-                echo '<tr>';
-                echo '<td>';
-                echo '<code>' . $this->view->e($g['name']) . '</code>';
-                if ($isSystem) {
-                    echo ' <span class="badge text-bg-primary">System</span>';
-                }
-                echo '</td>';
-                echo '<td>' . $this->view->e($g['label']) . '</td>';
-                echo '<td class="text-muted small">' . $this->view->e($g['description'] ?? '') . '</td>';
-                echo '<td class="text-end">' . (int) $g['member_count'] . '</td>';
-                echo '<td class="text-end text-nowrap">';
-                echo '<a href="' . $this->view->e($this->url->to('user/admin/groups/edit', ['id' => $id])) . '"'
-                   . ' class="btn btn-sm btn-outline-secondary">Edit</a>';
-                echo ' <form method="post"'
-                   . ' action="' . $this->view->e($this->url->to('user/admin/groups/clone')) . '"'
-                   . ' class="d-inline"'
-                   . ' onsubmit="return confirm(\'Clone this group (permissions only, no members)?\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="id" value="' . $id . '">';
-                echo '<button type="submit" class="btn btn-sm btn-outline-primary">Clone</button>';
-                echo '</form>';
-
-                if (!$isSystem) {
-                    echo ' <form method="post"'
-                       . ' action="' . $this->view->e($this->url->to('user/admin/groups/delete')) . '"'
-                       . ' class="d-inline"'
-                       . ' onsubmit="return confirm(\'Delete this group?\');">';
-                    echo $this->request->csrfField();
-                    echo '<input type="hidden" name="id" value="' . $id . '">';
-                    echo '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
-                    echo '</form>';
-                }
-
-                echo '</td>';
-                echo '</tr>';
-            }
-
-            echo '</tbody></table></div>';
+            echo $dataset->render();
         });
+    }
+
+    /**
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private function groupsListWhere(array $state): array
+    {
+        $clauses = [];
+        $params = [];
+
+        if ($state['q'] !== '') {
+            $needle = $this->likeNeedle($state['q']);
+            $clauses[] = '(g.name LIKE ? ESCAPE \'\\\\\' OR g.label LIKE ? ESCAPE \'\\\\\' OR g.description LIKE ? ESCAPE \'\\\\\')';
+            $params[] = $needle;
+            $params[] = $needle;
+            $params[] = $needle;
+        }
+
+        if ($clauses === []) {
+            return ['', []];
+        }
+
+        return [' WHERE ' . implode(' AND ', $clauses), $params];
+    }
+
+    private function groupsListSortColumn(string $sort): string
+    {
+        $allowed = ['name', 'label', 'member_count'];
+        return in_array($sort, $allowed, true) ? $sort : 'name';
+    }
+
+    private function likeNeedle(string $q): string
+    {
+        $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q);
+        return '%' . $escaped . '%';
     }
 
     public function addAction(): void

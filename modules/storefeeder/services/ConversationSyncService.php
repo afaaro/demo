@@ -33,14 +33,15 @@ final class ConversationSyncService
         int $maxThreadFetches = 0,
         int $maxPages = self::DEFAULT_MAX_PAGES,
     ): array {
-        if (!$this->channelTenantAllowed($channel)) {
-            return [
-                'created' => 0, 'updated' => 0, 'messages' => 0, 'pages' => 0, 'truncated' => false,
-            ];
-        }
-
         if (!$channel->isConnected()) {
             throw new RuntimeException("Channel '{$channel->name}' is not connected.");
+        }
+
+        if (!$this->channelTenantAllowed($channel)) {
+            throw new RuntimeException(
+                "Conversation sync blocked: channel '{$channel->name}' belongs to another tenant. "
+                . 'Switch to that tenant (Working in) and try again.'
+            );
         }
 
         if ($this->factory->isCourier($channel)) {
@@ -62,6 +63,9 @@ final class ConversationSyncService
                 'truncated' => false,
             ];
         }
+
+        // Repair rows saved under the wrong tenant (unique key is channel+external).
+        $this->conversations->rebindChannelTenant((int) $channel->id, (int) $channel->tenantId);
 
         $maxPages = max(1, min(self::DEFAULT_MAX_PAGES, $maxPages));
         $client   = $this->factory->make($channel);
@@ -183,13 +187,18 @@ final class ConversationSyncService
      */
     public function syncThread(Channel $channel, string $conversationId, string $conversationType = 'FROM_MEMBERS'): array
     {
-        if (!$this->channelTenantAllowed($channel)) {
-            return ['messages' => 0];
-        }
-
         if (!$channel->isConnected()) {
             throw new RuntimeException("Channel '{$channel->name}' is not connected.");
         }
+
+        if (!$this->channelTenantAllowed($channel)) {
+            throw new RuntimeException(
+                "Conversation sync blocked: channel '{$channel->name}' belongs to another tenant. "
+                . 'Switch to that tenant (Working in) and try again.'
+            );
+        }
+
+        $this->conversations->rebindChannelTenant((int) $channel->id, (int) $channel->tenantId);
 
         $conversationType = $this->normalizeConversationType($conversationType, 'FROM_MEMBERS');
 

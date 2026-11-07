@@ -5,8 +5,8 @@ use Module\StoreFeeder\Services\Channel;
 use Module\StoreFeeder\Services\ChannelClientFactory;
 use Module\StoreFeeder\Services\ChannelRepository;
 use Module\StoreFeeder\Services\ChannelSettings;
-use Module\StoreFeeder\Services\Channels\Amazon\AmazonPlatformApp;
-use Module\StoreFeeder\Services\Channels\Ebay\EbayPlatformApp;
+use Module\StoreFeeder\Services\Channels\Marketplace\Amazon\AmazonPlatformApp;
+use Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayPlatformApp;
 use Module\StoreFeeder\Services\CredentialsVault;
 use Module\StoreFeeder\Services\OrderSyncService;
 use Module\StoreFeeder\Services\SyncLogRepository;
@@ -254,7 +254,7 @@ class StoreFeederAdminChannels extends Controller
             if (!$hasLocal) {
                 $this->notify->error(
                     'eBay Connect needs the platform app keys. '
-                    . 'Set storefeeder.ebay (client_id, client_secret, ru_name) in system/config/storefeeder.php, '
+                    . 'Set storefeeder.ebay (client_id, client_secret, ru_name) in modules/storefeeder/config/ebay.php, '
                     . 'or enter App ID / Cert ID / RuName on this channel.'
                 );
                 redirect_to('storefeeder/admin/channels/edit', ['id' => $id]);
@@ -278,7 +278,7 @@ class StoreFeederAdminChannels extends Controller
             if (!$hasLocal) {
                 $this->notify->error(
                     'Amazon Link account needs the platform app keys. '
-                    . 'Set storefeeder.amazon (application_id, client_id, client_secret) in system/config/storefeeder.php, '
+                    . 'Set storefeeder.amazon (application_id, client_id, client_secret) in modules/storefeeder/config/amazon.php, '
                     . 'or enter Application ID / LWA keys on this channel.'
                 );
                 redirect_to('storefeeder/admin/channels/edit', ['id' => $id]);

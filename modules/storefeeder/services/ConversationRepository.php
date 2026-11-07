@@ -17,14 +17,46 @@ final class ConversationRepository
         if (!TenantContext::get()->has()) {
             return null;
         }
+        // Unique key is (channel_id, external_id) — look up without tenant so
+        // orphaned rows (wrong tenant_id) can be corrected on upsert.
         $row = $this->db->query(
             "SELECT * FROM `#__sf_conversations`
-              WHERE `channel_id` = ? AND `external_id` = ? AND `tenant_id` = ?
+              WHERE `channel_id` = ? AND `external_id` = ?
               LIMIT 1",
-            [$channelId, $externalId, $this->tenantId()]
+            [$channelId, $externalId]
         )->row;
 
         return $row !== [] ? $row : null;
+    }
+
+    /**
+     * Point all conversation rows for a channel at the channel's real tenant.
+     * Fixes silent unique-key failures when older rows were saved under the
+     * wrong tenant_id.
+     */
+    public function rebindChannelTenant(int $channelId, int $tenantId): int
+    {
+        $channelId = max(0, $channelId);
+        $tenantId  = max(1, $tenantId);
+        if ($channelId <= 0) {
+            return 0;
+        }
+
+        $headers = (int) $this->db->query(
+            "UPDATE `#__sf_conversations`
+                SET `tenant_id` = ?
+              WHERE `channel_id` = ? AND `tenant_id` <> ?",
+            [$tenantId, $channelId, $tenantId]
+        )->affected;
+
+        $messages = (int) $this->db->query(
+            "UPDATE `#__sf_conversation_messages`
+                SET `tenant_id` = ?
+              WHERE `channel_id` = ? AND `tenant_id` <> ?",
+            [$tenantId, $channelId, $tenantId]
+        )->affected;
+
+        return $headers + $messages;
     }
 
     /**
@@ -35,6 +67,7 @@ final class ConversationRepository
         if (!TenantContext::get()->has()) {
             return [];
         }
+        $this->rebindChannelTenant($channelId, $this->tenantId());
         return $this->db->query(
             "SELECT * FROM `#__sf_conversations`
               WHERE `channel_id` = ? AND `tenant_id` = ?
@@ -49,6 +82,7 @@ final class ConversationRepository
         if (!TenantContext::get()->has()) {
             return 0;
         }
+        $this->rebindChannelTenant($channelId, $this->tenantId());
         return (int) $this->db->query(
             "SELECT COUNT(*) FROM `#__sf_conversations` WHERE `channel_id` = ? AND `tenant_id` = ?",
             [$channelId, $this->tenantId()]
@@ -100,13 +134,22 @@ final class ConversationRepository
         ];
 
         $existing = $this->find($channelId, $externalId);
+        $data = $this->withTenant($data);
 
         if ($existing === null) {
-            $this->db->insert('sf_conversations', $this->withTenant($data));
-            return 'created';
+            try {
+                $this->db->insert('sf_conversations', $data);
+                return 'created';
+            } catch (\Throwable $e) {
+                // Concurrent insert or leftover unique row — fall through to update.
+                $existing = $this->find($channelId, $externalId);
+                if ($existing === null) {
+                    throw $e;
+                }
+            }
         }
 
-        $this->db->update('sf_conversations', $data, $this->withTenant(['id' => (int) $existing['id']]));
+        $this->db->update('sf_conversations', $data, ['id' => (int) $existing['id']]);
         return 'updated';
     }
 
@@ -200,22 +243,36 @@ final class ConversationRepository
             'synced_at'       => date('Y-m-d H:i:s'),
         ];
 
+        $data = $this->withTenant($data);
+
         $existing = $this->db->query(
             "SELECT `id` FROM `#__sf_conversation_messages`
-              WHERE `channel_id` = ? AND `external_id` = ? AND `tenant_id` = ?
+              WHERE `channel_id` = ? AND `external_id` = ?
               LIMIT 1",
-            [$channelId, $externalId, $tid]
+            [$channelId, $externalId]
         )->row;
 
         if ($existing === []) {
-            $this->db->insert('sf_conversation_messages', $this->withTenant($data));
-            return 'created';
+            try {
+                $this->db->insert('sf_conversation_messages', $data);
+                return 'created';
+            } catch (\Throwable $e) {
+                $existing = $this->db->query(
+                    "SELECT `id` FROM `#__sf_conversation_messages`
+                      WHERE `channel_id` = ? AND `external_id` = ?
+                      LIMIT 1",
+                    [$channelId, $externalId]
+                )->row;
+                if ($existing === []) {
+                    throw $e;
+                }
+            }
         }
 
         $this->db->update(
             'sf_conversation_messages',
             $data,
-            ['id' => (int) $existing['id'], 'tenant_id' => $tid]
+            ['id' => (int) $existing['id']]
         );
         return 'updated';
     }

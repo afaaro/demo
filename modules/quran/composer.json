@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/quran",
+    "description": "Quran navigator with Tanzil text, translations, search, and recitation.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Quran"
+    }
+}

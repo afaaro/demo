@@ -3,7 +3,8 @@ declare(strict_types=1);
 
 /**
  * Integration Manager catalog (StoreFeeder-style).
- * `available` types must have a working client under services/channels/{type}/.
+ * `available` types must have a working client under
+ * services/channels/{marketplace|courier|webstore}/{type}/.
  *
  * @return array<string, array{
  *   label: string,

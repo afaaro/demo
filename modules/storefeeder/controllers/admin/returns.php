@@ -6,6 +6,7 @@ use Module\StoreFeeder\Services\OrderRepository;
 use Module\StoreFeeder\Services\ReturnRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminReturns extends Controller
 {
@@ -26,101 +27,119 @@ class StoreFeederAdminReturns extends Controller
 
     public function indexAction(): void
     {
-        $status = trim((string) $this->request->get('status', 'string', ''));
-        $channelId = (int) $this->request->get('channel_id', 'int', 0);
-        $q = trim((string) $this->request->get('q', 'string', ''));
-
-        $rows = $this->returns->list($status, $channelId, $q, 150, 0);
-        $total = $this->returns->count($status, $channelId, $q);
         $channels = $this->channels->all();
 
-        echo $this->view->inline(function () use ($rows, $total, $status, $channelId, $q, $channels) {
-            $this->view->assign('title', 'Returns');
-            $this->view->block('right_sidebar', 'Returns');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+        $channelOptions = ['0' => 'All channels'];
+        foreach ($channels as $c) {
+            $channelOptions[(string) (int) $c->id] = $c->label !== '' ? $c->label : $c->name;
+        }
 
-            echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">';
-            echo '<div><h1 class="h3 mb-1"><i class="bi bi-arrow-return-left me-1"></i>Returns</h1>'
-               . '<p class="text-muted small mb-0">RMA / refunds logged against orders. '
-               . $e((string) $total) . ' matching.</p></div>';
-            echo '</div>';
+        $statusOptions = ['' => 'All statuses'];
+        foreach (['open', 'approved', 'received', 'refunded', 'closed', 'cancelled'] as $st) {
+            $statusOptions[$st] = ucfirst($st);
+        }
 
-            echo '<form method="get" action="' . $e($this->url->to('storefeeder/admin/returns'))
-               . '" class="row g-2 align-items-end mb-3">';
-            echo '<div class="col-md-3"><label class="form-label small mb-1">Search</label>'
-               . '<input type="text" name="q" class="form-control form-control-sm" value="' . $e($q)
-               . '" placeholder="Order id, buyer, reason"></div>';
-            echo '<div class="col-md-2"><label class="form-label small mb-1">Status</label>'
-               . '<select name="status" class="form-select form-select-sm">'
-               . '<option value="">All</option>';
-            foreach (['open', 'approved', 'received', 'refunded', 'closed', 'cancelled'] as $st) {
-                echo '<option value="' . $e($st) . '"' . ($status === $st ? ' selected' : '') . '>'
-                   . $e(ucfirst($st)) . '</option>';
-            }
-            echo '</select></div>';
-            echo '<div class="col-md-3"><label class="form-label small mb-1">Channel</label>'
-               . '<select name="channel_id" class="form-select form-select-sm">'
-               . '<option value="0">All channels</option>';
-            foreach ($channels as $c) {
-                $label = $c->label !== '' ? $c->label : $c->name;
-                echo '<option value="' . (int) $c->id . '"'
-                   . ($channelId === (int) $c->id ? ' selected' : '') . '>'
-                   . $e($label) . '</option>';
-            }
-            echo '</select></div>';
-            echo '<div class="col-md-2"><button type="submit" class="btn btn-sm btn-primary w-100">Filter</button></div>';
-            echo '<div class="col-md-2"><a class="btn btn-sm btn-outline-secondary w-100" href="'
-               . $e($this->url->to('storefeeder/admin/returns')) . '">Reset</a></div>';
-            echo '</form>';
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->searchPlaceholder('Order id, buyer, reason…')
+            ->sortable(['id', 'created_at', 'status', 'refund_amount'])
+            ->defaultSort('id', 'desc')
+            ->filter('status', 'select', $statusOptions)
+            ->filter('channel_id', 'select', $channelOptions)
+            ->columns([
+                'id'           => '#',
+                'order'        => 'Order',
+                'channel'      => 'Channel',
+                'buyer'        => 'Buyer',
+                'status'       => 'Status',
+                'reason'       => 'Reason',
+                'refund'       => 'Refund',
+                'created_at'   => 'Created',
+                'actions'      => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $status = (string) ($state['filters']['status'] ?? '');
+                $channelId = (int) ($state['filters']['channel_id'] ?? 0);
+                $rows = $this->returns->list(
+                    $status,
+                    $channelId,
+                    $state['q'],
+                    $state['per_page'],
+                    $state['offset']
+                );
+                $total = $this->returns->count($status, $channelId, $state['q']);
 
-            echo '<div class="table-responsive border rounded bg-white">';
-            echo '<table class="table table-sm table-hover align-middle mb-0">';
-            echo '<thead class="table-light"><tr>'
-               . '<th>#</th><th>Order</th><th>Channel</th><th>Buyer</th><th>Status</th>'
-               . '<th>Reason</th><th class="text-end">Refund</th><th>Created</th><th></th>'
-               . '</tr></thead><tbody>';
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $rows),
+                    'total' => $total,
+                ];
+            });
 
-            if ($rows === []) {
-                echo '<tr><td colspan="9" class="text-muted text-center py-4">'
-                   . 'No returns yet. Log one from an order detail page.</td></tr>';
-            }
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
-            foreach ($rows as $r) {
-                $rid = (int) $r['id'];
+        $dataset->columns([
+            'id' => fn(array $row): string => (string) (int) $row['_row']['id'],
+            'order' => function (array $row) use ($e): string {
+                $r = $row['_row'];
+                $orderLabel = (string) ($r['external_order_id'] !== ''
+                    ? $r['external_order_id']
+                    : ($r['order_external_id'] !== '' ? $r['order_external_id'] : '—'));
                 $oid = $r['order_id'];
-                $badge = match (strtolower((string) $r['status'])) {
+                if ($oid !== null && (int) $oid > 0) {
+                    return '<a href="'
+                        . $e($this->url->to('storefeeder/admin/orders/view', ['id' => (int) $oid]))
+                        . '">' . $e($orderLabel) . '</a>';
+                }
+                return $e($orderLabel);
+            },
+            'channel' => function (array $row) use ($e): string {
+                return '<span class="small">' . $e((string) ($row['_row']['channel_label'] !== ''
+                    ? $row['_row']['channel_label'] : '—')) . '</span>';
+            },
+            'buyer' => function (array $row) use ($e): string {
+                return '<span class="small">' . $e((string) ($row['_row']['buyer_username'] !== ''
+                    ? $row['_row']['buyer_username'] : '—')) . '</span>';
+            },
+            'status' => function (array $row) use ($e): string {
+                $st = (string) $row['_row']['status'];
+                $badge = match (strtolower($st)) {
                     'open', 'approved' => 'text-bg-warning',
                     'received' => 'text-bg-info',
                     'refunded', 'closed' => 'text-bg-success',
                     'cancelled' => 'text-bg-secondary',
                     default => 'text-bg-light',
                 };
-                $orderLabel = (string) ($r['external_order_id'] !== ''
-                    ? $r['external_order_id']
-                    : ($r['order_external_id'] !== '' ? $r['order_external_id'] : '—'));
-                echo '<tr>';
-                echo '<td>' . $rid . '</td>';
-                echo '<td>';
-                if ($oid !== null && (int) $oid > 0) {
-                    echo '<a href="' . $e($this->url->to('storefeeder/admin/orders/view', ['id' => (int) $oid])) . '">'
-                       . $e($orderLabel) . '</a>';
-                } else {
-                    echo $e($orderLabel);
-                }
-                echo '</td>';
-                echo '<td class="small">' . $e((string) ($r['channel_label'] !== '' ? $r['channel_label'] : '—')) . '</td>';
-                echo '<td class="small">' . $e((string) ($r['buyer_username'] !== '' ? $r['buyer_username'] : '—')) . '</td>';
-                echo '<td><span class="badge ' . $badge . '">' . $e((string) $r['status']) . '</span></td>';
-                echo '<td class="small">' . $e((string) $r['reason']) . '</td>';
-                echo '<td class="text-end text-nowrap">' . number_format((float) $r['refund_amount'], 2)
-                   . ' ' . $e((string) $r['currency']) . '</td>';
-                echo '<td class="small text-nowrap">' . $e((string) $r['created_at']) . '</td>';
-                echo '<td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/returns/view', ['id' => $rid])) . '">View</a></td>';
-                echo '</tr>';
-            }
+                return '<span class="badge ' . $badge . '">' . $e($st) . '</span>';
+            },
+            'reason' => function (array $row) use ($e): string {
+                return '<span class="small">' . $e((string) $row['_row']['reason']) . '</span>';
+            },
+            'refund' => function (array $row) use ($e): string {
+                $r = $row['_row'];
+                return '<span class="text-end text-nowrap d-block">'
+                    . number_format((float) $r['refund_amount'], 2)
+                    . ' ' . $e((string) $r['currency']) . '</span>';
+            },
+            'created_at' => function (array $row) use ($e): string {
+                return '<span class="small text-nowrap">' . $e((string) $row['_row']['created_at']) . '</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                return '<span class="text-end d-block"><a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('storefeeder/admin/returns/view', ['id' => (int) $row['_row']['id']]))
+                    . '">View</a></span>';
+            },
+        ]);
 
-            echo '</tbody></table></div>';
+        echo $this->view->inline(function () use ($dataset) {
+            $this->view->assign('title', 'Returns');
+            $this->view->block('right_sidebar', 'Returns');
+
+            echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">';
+            echo '<div><h1 class="h3 mb-1"><i class="bi bi-arrow-return-left me-1"></i>Returns</h1>'
+               . '<p class="text-muted small mb-0">RMA / refunds logged against orders.</p></div>';
+            echo '</div>';
+
+            echo $dataset->render();
         });
     }
 

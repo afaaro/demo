@@ -172,13 +172,19 @@ final class TenantResolver
     }
 
     /**
-     * Domain holder — manages all tenants. Permission-based, not a named group.
+     * Domain holder — may enter any tenant and see the full switcher.
+     *
+     * Driven by modules/storefeeder/config/app.php → platform_user_ids
+     * (default [1]), not by storefeeder.* — otherwise every CMS Admin lands
+     * on Default / platform home.
      */
     public function isPlatformOwner(): bool
     {
-        return $this->auth->can('storefeeder.admin.tenants.index')
-            || $this->auth->can('storefeeder.admin.tenants.*')
-            || $this->auth->can('storefeeder.*');
+        if (!$this->auth->check()) {
+            return false;
+        }
+        $uid = (int) ($this->auth->id() ?? 0);
+        return $uid > 0 && in_array($uid, self::platformUserIds(), true);
     }
 
     /** @return list<int> */

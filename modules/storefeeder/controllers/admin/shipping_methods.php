@@ -4,6 +4,7 @@ declare(strict_types=1);
 use Module\StoreFeeder\Services\ShippingMethodRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminShippingMethods extends Controller
 {
@@ -19,12 +20,63 @@ class StoreFeederAdminShippingMethods extends Controller
 
     public function indexAction(): void
     {
-        $rows = $this->methods->all();
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->sortable(['company', 'method', 'cost'])
+            ->defaultSort('company', 'asc')
+            ->columns([
+                'company'  => 'Shipping Company',
+                'method'   => 'Shipping Method',
+                'cost'     => 'Cost',
+                'default'  => 'Default',
+                'actions'  => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $rows = $this->methods->all();
+                $rows = $this->sortListRows($rows, $state['sort'], $state['dir'], ['cost' => 'float']);
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+        $dataset->columns([
+            'company' => function (array $row) use ($e): string {
+                return $e((string) $row['_row']['company']);
+            },
+            'method' => function (array $row) use ($e): string {
+                return '<span class="fw-semibold">' . $e((string) $row['_row']['method']) . '</span>';
+            },
+            'cost'    => fn(array $row): string =>
+                '<span class="text-end d-block">£ '
+                . number_format((float) $row['_row']['cost'], 2) . '</span>',
+            'default' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $id = (int) $item['id'];
+                if (!empty($item['is_default'])) {
+                    return '<span class="text-muted">Is Default</span>';
+                }
+                $html = '<form method="post" class="d-inline" action="'
+                    . $e($this->url->to('storefeeder/admin/shipping-methods/default', ['id' => $id])) . '">';
+                $html .= $this->request->csrfField();
+                $html .= '<button type="submit" class="btn btn-link btn-sm p-0">Make Default</button>';
+                return $html . '</form>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                return '<span class="text-end d-block"><a href="'
+                    . $e($this->url->to('storefeeder/admin/shipping-methods/edit', ['id' => (int) $row['_row']['id']]))
+                    . '">Edit/View Shipping Method</a></span>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Shipping Methods');
             $this->view->block('right_sidebar', 'Shipping');
-            $e = fn(string $s): string => $this->view->e($s);
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">';
             echo '<h1 class="h3 mb-0">Shipping Methods</h1>';
@@ -33,46 +85,7 @@ class StoreFeederAdminShippingMethods extends Controller
                . '<i class="bi bi-plus-lg me-1"></i>New Shipping Method</a>';
             echo '</div>';
 
-            echo '<div class="card border-0 shadow-sm">';
-            echo '<div class="card-header bg-dark text-white py-2">Existing Shipping Methods</div>';
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-sm table-hover align-middle mb-0">';
-            echo '<thead class="table-light"><tr>'
-               . '<th>Shipping Company</th>'
-               . '<th>Shipping Method</th>'
-               . '<th class="text-end">Cost</th>'
-               . '<th>Default</th>'
-               . '<th></th>'
-               . '</tr></thead><tbody>';
-
-            if ($rows === []) {
-                echo '<tr><td colspan="5" class="text-muted">No shipping methods yet.</td></tr>';
-            }
-
-            foreach ($rows as $row) {
-                $id = (int) $row['id'];
-                $isDefault = !empty($row['is_default']);
-                echo '<tr>';
-                echo '<td>' . $e((string) $row['company']) . '</td>';
-                echo '<td class="fw-semibold">' . $e((string) $row['method']) . '</td>';
-                echo '<td class="text-end">£ ' . number_format((float) $row['cost'], 2) . '</td>';
-                echo '<td>';
-                if ($isDefault) {
-                    echo '<span class="text-muted">Is Default</span>';
-                } else {
-                    echo '<form method="post" class="d-inline" action="'
-                       . $e($this->url->to('storefeeder/admin/shipping-methods/default', ['id' => $id])) . '">';
-                    echo $this->request->csrfField();
-                    echo '<button type="submit" class="btn btn-link btn-sm p-0">Make Default</button>';
-                    echo '</form>';
-                }
-                echo '</td>';
-                echo '<td class="text-end"><a href="'
-                   . $e($this->url->to('storefeeder/admin/shipping-methods/edit', ['id' => $id]))
-                   . '">Edit/View Shipping Method</a></td>';
-                echo '</tr>';
-            }
-            echo '</tbody></table></div></div>';
+            echo $dataset->render();
         });
     }
 
@@ -167,6 +180,29 @@ class StoreFeederAdminShippingMethods extends Controller
             $this->notify->error($e->getMessage());
         }
         redirect_to('storefeeder/admin/shipping-methods');
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $types
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortListRows(array $rows, string $sort, string $dir, array $types = []): array
+    {
+        $mult = strtolower($dir) === 'desc' ? -1 : 1;
+        usort($rows, function (array $a, array $b) use ($sort, $mult, $types): int {
+            $va = $a[$sort] ?? '';
+            $vb = $b[$sort] ?? '';
+            $kind = $types[$sort] ?? 'string';
+            if ($kind === 'float') {
+                return $mult * ((float) $va <=> (float) $vb);
+            }
+            if ($kind === 'int') {
+                return $mult * ((int) $va <=> (int) $vb);
+            }
+            return $mult * strcasecmp((string) $va, (string) $vb);
+        });
+        return $rows;
     }
 
     /** @param array<string, mixed>|null $row */

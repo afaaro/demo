@@ -5,6 +5,7 @@ use Module\News\Services\NewsCategory;
 use Module\News\Services\NewsCategoryRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class NewsAdminCategories extends Controller
 {
@@ -26,12 +27,96 @@ class NewsAdminCategories extends Controller
 
     public function indexAction(): void
     {
-        $items = $this->categories->withCounts();
+        $dataset = (new Dataset($this->registry))
+            ->perPage(100)
+            ->searchable(['name', 'slug'])
+            ->searchPlaceholder('Search name or slug…')
+            ->sortable(['name', 'slug', 'count'])
+            ->defaultSort('name', 'asc')
+            ->columns([
+                'name'    => 'Name',
+                'slug'    => 'Slug',
+                'count'   => 'Articles',
+                'actions' => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $items = $this->categories->withCounts();
+                $q = $state['q'];
+                if ($q !== '') {
+                    $needle = mb_strtolower($q);
+                    $items = array_values(array_filter(
+                        $items,
+                        static fn(array $c): bool =>
+                            str_contains(mb_strtolower((string) $c['name']), $needle)
+                            || str_contains(mb_strtolower((string) $c['slug']), $needle)
+                    ));
+                }
 
-        echo $this->view->inline(function () use ($items) {
+                $sort = in_array($state['sort'], ['name', 'slug', 'count'], true)
+                    ? $state['sort']
+                    : 'name';
+                $dir = $state['dir'] === 'desc' ? -1 : 1;
+                usort($items, static function (array $a, array $b) use ($sort, $dir): int {
+                    $av = $a[$sort] ?? '';
+                    $bv = $b[$sort] ?? '';
+                    if ($sort === 'count') {
+                        return $dir * ((int) $av <=> (int) $bv);
+                    }
+                    return $dir * strcasecmp((string) $av, (string) $bv);
+                });
+
+                $total = count($items);
+                $slice = array_slice($items, $state['offset'], $state['per_page']);
+
+                return [
+                    'rows'  => array_map(static fn(array $c): array => ['_row' => $c], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string =>
+            $this->view->e((string) $value);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                $c = $row['_row'];
+
+                return '<a class="sf-title" href="'
+                    . $e($this->url->to('news/admin/categories/edit', ['id' => $c['id']]))
+                    . '">' . $e((string) $c['name']) . '</a>';
+            },
+
+            'slug' => function (array $row) use ($e): string {
+                return '<span class="sf-sub">'
+                    . $e((string) ($row['_row']['slug'] ?? '')) . '</span>';
+            },
+
+            'count' => function (array $row): string {
+                return (string) (int) $row['_row']['count'];
+            },
+
+            'actions' => function (array $row) use ($e): string {
+                $c = $row['_row'];
+
+                $html = '<div class="sf-row-acts">';
+                $html .= '<a href="'
+                    . $e($this->url->to('news/admin/categories/edit', ['id' => $c['id']]))
+                    . '" class="sf-btn">Edit</a>';
+                $html .= '<form method="post" action="'
+                    . $e($this->url->to('news/admin/categories/delete'))
+                    . '" onsubmit="return confirm(\'Delete this category? Articles will be unassigned.\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<input type="hidden" name="id" value="' . (int) $c['id'] . '">';
+                $html .= '<button type="submit" class="sf-btn is-danger">Delete</button>';
+                $html .= '</form>';
+
+                return $html . '</div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'News categories');
             $this->view->block('right_sidebar', 'News');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="sf-page">';
             echo '<div class="sf-head">';
@@ -44,37 +129,8 @@ class NewsAdminCategories extends Controller
             echo '</div></div>';
 
             echo '<section class="sf-card">';
-
-            if ($items === []) {
-                echo '<p class="sf-empty">No categories yet. '
-                   . '<a href="' . $e($this->url->to('news/admin/categories/add')) . '">Create the first one</a>.</p>'
-                   . '</section></div>';
-                return;
-            }
-
-            echo '<div class="table-responsive"><table class="sf-table">';
-            echo '<thead><tr><th>Name</th><th>Slug</th>'
-               . '<th class="c-count">Articles</th><th class="c-acts"></th></tr></thead><tbody>';
-
-            foreach ($items as $c) {
-                echo '<tr>';
-                echo '<td><a class="sf-title" href="'
-                   . $e($this->url->to('news/admin/categories/edit', ['id' => $c['id']])) . '">'
-                   . $e((string) $c['name']) . '</a></td>';
-                echo '<td><span class="sf-sub">' . $e((string) ($c['slug'] ?? '')) . '</span></td>';
-                echo '<td class="c-count">' . (int) $c['count'] . '</td>';
-                echo '<td class="c-acts"><div class="sf-row-acts">';
-                echo '<a href="' . $e($this->url->to('news/admin/categories/edit', ['id' => $c['id']])) . '"'
-                   . ' class="sf-btn">Edit</a>';
-                echo '<form method="post" action="' . $e($this->url->to('news/admin/categories/delete')) . '"'
-                   . ' onsubmit="return confirm(\'Delete this category? Articles will be unassigned.\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="id" value="' . (int) $c['id'] . '">';
-                echo '<button type="submit" class="sf-btn is-danger">Delete</button>';
-                echo '</form></div></td></tr>';
-            }
-
-            echo '</tbody></table></div></section></div>';
+            echo $dataset->render();
+            echo '</section></div>';
         });
     }
 

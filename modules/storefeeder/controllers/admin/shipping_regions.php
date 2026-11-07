@@ -4,6 +4,7 @@ declare(strict_types=1);
 use Module\StoreFeeder\Services\ShippingRegionRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminShippingRegions extends Controller
 {
@@ -19,20 +20,78 @@ class StoreFeederAdminShippingRegions extends Controller
 
     public function indexAction(): void
     {
-        $rows = $this->regions->all();
-        $q = trim((string) $this->request->get('q', 'string', ''));
-        if ($q !== '') {
-            $rows = array_values(array_filter($rows, static function (array $row) use ($q): bool {
-                $hay = strtolower(
-                    (string) ($row['name'] ?? '') . ' '
-                    . (string) ($row['countries'] ?? '') . ' '
-                    . (string) ($row['postcodes'] ?? '')
-                );
-                return str_contains($hay, strtolower($q));
-            }));
-        }
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->searchPlaceholder('Name, country, postcode…')
+            ->sortable(['name'])
+            ->defaultSort('name', 'asc')
+            ->columns([
+                'name'       => 'Region',
+                'countries'  => 'Countries',
+                'postcodes'  => 'Postcodes',
+                'notes'      => 'Notes',
+                'actions'    => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $rows = $this->regions->all();
+                $q = strtolower($state['q']);
+                if ($q !== '') {
+                    $rows = array_values(array_filter($rows, static function (array $row) use ($q): bool {
+                        $hay = strtolower(
+                            (string) ($row['name'] ?? '') . ' '
+                            . (string) ($row['countries'] ?? '') . ' '
+                            . (string) ($row['postcodes'] ?? '')
+                        );
+                        return str_contains($hay, $q);
+                    }));
+                }
+                usort($rows, static function (array $a, array $b) use ($state): int {
+                    $mult = strtolower($state['dir']) === 'desc' ? -1 : 1;
+                    return $mult * strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+                });
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows, $q) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                return '<span class="fw-semibold">' . $e((string) $row['_row']['name']) . '</span>';
+            },
+            'countries' => function (array $row) use ($e): string {
+                $countries = trim((string) ($row['_row']['countries'] ?? ''));
+                return $countries !== ''
+                    ? '<span class="small">' . $e($this->previewList($countries)) . '</span>'
+                    : '<span class="text-muted">All / ROW</span>';
+            },
+            'postcodes' => function (array $row) use ($e): string {
+                $postcodes = trim((string) ($row['_row']['postcodes'] ?? ''));
+                return $postcodes !== ''
+                    ? '<span class="small">' . $e($this->previewList($postcodes)) . '</span>'
+                    : '<span class="text-muted">—</span>';
+            },
+            'notes' => function (array $row) use ($e): string {
+                $notes = trim((string) ($row['_row']['notes'] ?? ''));
+                if ($notes === '') {
+                    return '<span class="small text-muted">—</span>';
+                }
+                $text = mb_strlen($notes) > 60 ? mb_substr($notes, 0, 60) . '…' : $notes;
+                return '<span class="small text-muted">' . $e($text) . '</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                return '<span class="text-end text-nowrap d-block"><a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('storefeeder/admin/shipping-regions/edit', ['id' => (int) $row['_row']['id']]))
+                    . '">Edit</a></span>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset) {
             $this->view->assign('title', 'Shipping Regions');
             $this->view->block('right_sidebar', 'Shipping');
             $e = fn(string $s): string => $this->view->e($s);
@@ -45,50 +104,7 @@ class StoreFeederAdminShippingRegions extends Controller
                . '<i class="bi bi-plus-lg me-1"></i>New region</a>';
             echo '</div>';
 
-            echo '<form method="get" class="row g-2 align-items-end mb-3" action="'
-               . $e($this->url->to('storefeeder/admin/shipping-regions')) . '">';
-            echo '<div class="col-md-5"><label class="form-label small mb-1">Search</label>'
-               . '<input type="search" name="q" class="form-control" value="' . $e($q) . '"'
-               . ' placeholder="Name, country, postcode…"></div>';
-            echo '<div class="col-auto"><button class="btn btn-outline-secondary" type="submit">Apply</button>';
-            if ($q !== '') {
-                echo ' <a class="btn btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/shipping-regions')) . '">Reset</a>';
-            }
-            echo '</div></form>';
-
-            echo '<div class="table-responsive border rounded">';
-            echo '<table class="table table-sm table-hover align-middle mb-0">';
-            echo '<thead class="table-light"><tr>'
-               . '<th>Region</th><th>Countries</th><th>Postcodes</th><th>Notes</th><th></th>'
-               . '</tr></thead><tbody>';
-            if ($rows === []) {
-                echo '<tr><td colspan="5" class="text-muted p-3">No regions'
-                   . ($q !== '' ? ' matching your search' : ' yet') . '.</td></tr>';
-            }
-            foreach ($rows as $row) {
-                $id = (int) $row['id'];
-                $countries = trim((string) ($row['countries'] ?? ''));
-                $postcodes = trim((string) ($row['postcodes'] ?? ''));
-                $notes = trim((string) ($row['notes'] ?? ''));
-                echo '<tr>';
-                echo '<td class="fw-semibold">' . $e((string) $row['name']) . '</td>';
-                echo '<td class="small">'
-                   . ($countries !== '' ? $e($this->previewList($countries)) : '<span class="text-muted">All / ROW</span>')
-                   . '</td>';
-                echo '<td class="small">'
-                   . ($postcodes !== '' ? $e($this->previewList($postcodes)) : '<span class="text-muted">—</span>')
-                   . '</td>';
-                echo '<td class="small text-muted">'
-                   . ($notes !== '' ? $e(mb_strlen($notes) > 60 ? mb_substr($notes, 0, 60) . '…' : $notes) : '—')
-                   . '</td>';
-                echo '<td class="text-end text-nowrap">'
-                   . '<a class="btn btn-sm btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/shipping-regions/edit', ['id' => $id]))
-                   . '">Edit</a></td>';
-                echo '</tr>';
-            }
-            echo '</tbody></table></div>';
+            echo $dataset->render();
         });
     }
 

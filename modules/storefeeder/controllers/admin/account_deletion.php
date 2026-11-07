@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 use Module\StoreFeeder\Services\Channel;
 use Module\StoreFeeder\Services\ChannelRepository;
-use Module\StoreFeeder\Services\Channels\Ebay\EbayPlatformApp;
+use Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayPlatformApp;
 use Module\StoreFeeder\Services\CredentialsVault;
 use Module\StoreFeeder\Services\TenantContext;
 use System\Engine\Controller;

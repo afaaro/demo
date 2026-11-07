@@ -35,8 +35,8 @@ use System\Services\User;
  *
  * Nested paths map to nested namespaces:
  *
- *   $this->load->service('channels/ebay/EbayFulfillmentClient');
- *   // → Module\StoreFeeder\Services\Channels\Ebay\EbayFulfillmentClient
+ *   $this->load->service('channels/marketplace/ebay/EbayFulfillmentClient');
+ *   // → Module\StoreFeeder\Services\Channels\Marketplace\Ebay\EbayFulfillmentClient
  *
  * Pass constructor args explicitly when auto-wiring is not enough:
  *

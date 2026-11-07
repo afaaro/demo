@@ -5,6 +5,7 @@ require_once dirname(__DIR__, 2) . '/helpers/functions.php';
 
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class ForumAdminCategories extends Controller
 {
@@ -15,18 +16,132 @@ class ForumAdminCategories extends Controller
 
     public function indexAction(): void
     {
-        $items = $this->db->query(
-            "SELECT c.*,
-                    (SELECT COUNT(*) FROM `#__forum_threads` t
-                      WHERE t.`category_id` = c.`id` AND t.`is_deleted` = 0) AS thread_count
-               FROM `#__forum_categories` c
-              ORDER BY c.`position`, c.`name`"
-        )->rows;
+        $dataset = (new Dataset($this->registry))
+            ->perPage(100)
+            ->searchPlaceholder('Search forum name or slug…')
+            ->sortable(['position', 'name', 'status', 'thread_count', 'posts_count'])
+            ->defaultSort('position', 'asc')
+            ->columns([
+                'forum'        => 'Forum',
+                'status'       => 'Status',
+                'thread_count' => 'Threads',
+                'posts_count'  => 'Messages',
+                'actions'      => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $where  = ['1=1'];
+                $params = [];
+                if ($state['q'] !== '') {
+                    $where[]  = '(c.`name` LIKE ? ESCAPE \'\\\\\' OR c.`slug` LIKE ? ESCAPE \'\\\\\')';
+                    $needle   = '%' . str_replace(
+                        ['\\', '%', '_'],
+                        ['\\\\', '\\%', '\\_'],
+                        $state['q']
+                    ) . '%';
+                    $params[] = $needle;
+                    $params[] = $needle;
+                }
 
-        echo $this->view->inline(function () use ($items) {
+                $sqlWhere = implode(' AND ', $where);
+
+                $sortMap = [
+                    'position'      => 'c.`position`',
+                    'name'          => 'c.`name`',
+                    'status'        => 'c.`status`',
+                    'thread_count'  => 'thread_count',
+                    'posts_count'   => 'c.`posts_count`',
+                ];
+                $sortKey = $state['sort'];
+                $orderCol = $sortMap[$sortKey] ?? 'c.`position`';
+                $dir = $state['dir'] === 'asc' ? 'ASC' : 'DESC';
+                $orderSql = " ORDER BY {$orderCol} {$dir}, c.`name` ASC, c.`id` DESC";
+
+                $total = (int) $db->query(
+                    "SELECT COUNT(*) FROM `#__forum_categories` c WHERE {$sqlWhere}",
+                    $params
+                )->value;
+
+                $items = $db->query(
+                    "SELECT c.*,
+                            (SELECT COUNT(*) FROM `#__forum_threads` t
+                              WHERE t.`category_id` = c.`id` AND t.`is_deleted` = 0) AS thread_count
+                       FROM `#__forum_categories` c
+                      WHERE {$sqlWhere}
+                      {$orderSql}
+                      LIMIT ?, ?",
+                    [...$params, $state['offset'], $state['per_page']]
+                )->rows;
+
+                return [
+                    'rows'  => array_map(static fn(array $c): array => ['_row' => $c], $items),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string =>
+            $this->view->e((string) $value);
+
+        $dataset->columns([
+            'forum' => function (array $row) use ($e): string {
+                $c = $row['_row'];
+                $id = (int) $c['id'];
+
+                $html = '<a class="sf-title" href="'
+                    . $e($this->url->to('forum/admin/categories/edit', ['id' => $id]))
+                    . '">' . $e((string) $c['name']) . '</a>';
+                $html .= '<span class="sf-sub">/' . $e((string) $c['slug']);
+                if (((string) ($c['description'] ?? '')) !== '') {
+                    $html .= ' · ' . $e((string) $c['description']);
+                }
+
+                return $html . '</span>';
+            },
+
+            'status' => function (array $row): string {
+                return match ((string) $row['_row']['status']) {
+                    'visible' => '<span class="sf-pill is-ok">Visible</span>',
+                    'locked'  => '<span class="sf-pill is-wait">Locked</span>',
+                    default   => '<span class="sf-pill is-off">Hidden</span>',
+                };
+            },
+
+            'thread_count' => function (array $row): string {
+                return (string) (int) ($row['_row']['thread_count'] ?? 0);
+            },
+
+            'posts_count' => function (array $row): string {
+                return (string) (int) ($row['_row']['posts_count'] ?? 0);
+            },
+
+            'actions' => function (array $row) use ($e): string {
+                $c = $row['_row'];
+                $id = (int) $c['id'];
+                $status = (string) $c['status'];
+
+                $html = '<div class="sf-row-acts">';
+                if ($status === 'visible') {
+                    $html .= '<a class="sf-btn" href="'
+                        . $e($this->url->to('forum/category', ['slug' => (string) $c['slug']]))
+                        . '" target="_blank" rel="noopener">Open</a>';
+                }
+                $html .= '<a class="sf-btn" href="'
+                    . $e($this->url->to('forum/admin/categories/edit', ['id' => $id]))
+                    . '">Edit</a>';
+                $html .= '<form method="post" action="'
+                    . $e($this->url->to('forum/admin/categories/delete'))
+                    . '" onsubmit="return confirm(\'Delete this forum?\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<input type="hidden" name="id" value="' . $id . '">';
+                $html .= '<button type="submit" class="sf-btn is-danger">Delete</button>';
+                $html .= '</form>';
+
+                return $html . '</div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Forums');
             $this->view->block('right_sidebar', 'Forum');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="sf-page">';
             echo '<div class="sf-head"><div><h1>Forums</h1>'
@@ -37,51 +152,8 @@ class ForumAdminCategories extends Controller
             echo '<a class="sf-btn is-primary" href="' . $e($this->url->to('forum/admin/categories/add')) . '">'
                . '<i class="bi bi-plus-lg"></i>New forum</a>';
             echo '</div></div><section class="sf-card">';
-
-            if ($items === []) {
-                echo '<p class="sf-empty">No forums yet. '
-                   . '<a href="' . $e($this->url->to('forum/admin/categories/add')) . '">Create one</a>.</p></section></div>';
-                return;
-            }
-
-            echo '<div class="sf-card-h"><h2>' . count($items) . ' forum'
-               . (count($items) === 1 ? '' : 's') . '</h2></div>';
-            echo '<div class="table-responsive"><table class="sf-table"><thead><tr>'
-               . '<th>Forum</th><th class="c-status">Status</th><th class="c-count">Threads</th>'
-               . '<th class="c-count">Messages</th><th class="c-acts"></th>'
-               . '</tr></thead><tbody>';
-            foreach ($items as $c) {
-                $id = (int) $c['id'];
-                $status = (string) $c['status'];
-                $pill = match ($status) {
-                    'visible' => '<span class="sf-pill is-ok">Visible</span>',
-                    'locked'  => '<span class="sf-pill is-wait">Locked</span>',
-                    default   => '<span class="sf-pill is-off">Hidden</span>',
-                };
-                echo '<tr><td><a class="sf-title" href="'
-                   . $e($this->url->to('forum/admin/categories/edit', ['id' => $id])) . '">'
-                   . $e((string) $c['name']) . '</a>'
-                   . '<span class="sf-sub">/' . $e((string) $c['slug'])
-                   . (((string) ($c['description'] ?? '')) !== '' ? ' · ' . $e((string) $c['description']) : '')
-                   . '</span></td>';
-                echo '<td class="c-status">' . $pill . '</td>';
-                echo '<td class="c-count">' . (int) $c['thread_count'] . '</td>';
-                echo '<td class="c-count">' . (int) ($c['posts_count'] ?? 0) . '</td>';
-                echo '<td class="c-acts"><div class="sf-row-acts">';
-                if ($status === 'visible') {
-                    echo '<a class="sf-btn" href="'
-                       . $e($this->url->to('forum/category', ['slug' => (string) $c['slug']]))
-                       . '" target="_blank" rel="noopener">Open</a>';
-                }
-                echo '<a class="sf-btn" href="' . $e($this->url->to('forum/admin/categories/edit', ['id' => $id])) . '">Edit</a>';
-                echo '<form method="post" action="' . $e($this->url->to('forum/admin/categories/delete')) . '"'
-                   . ' onsubmit="return confirm(\'Delete this forum?\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="id" value="' . $id . '">';
-                echo '<button type="submit" class="sf-btn is-danger">Delete</button>';
-                echo '</form></div></td></tr>';
-            }
-            echo '</tbody></table></div></section></div>';
+            echo $dataset->render();
+            echo '</section></div>';
         });
     }
 

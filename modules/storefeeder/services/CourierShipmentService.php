@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 namespace Module\StoreFeeder\Services;
 
-use Module\StoreFeeder\Services\Channels\AbstractCourierChannelClient;
-use Module\StoreFeeder\Services\Channels\Evri\EvriChannelClient;
+use Module\StoreFeeder\Services\Channels\Courier\AbstractCourierChannelClient;
+use Module\StoreFeeder\Services\Channels\Courier\Evri\EvriChannelClient;
 use RuntimeException;
 
 /**

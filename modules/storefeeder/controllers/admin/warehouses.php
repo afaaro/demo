@@ -4,6 +4,7 @@ declare(strict_types=1);
 use Module\StoreFeeder\Services\WarehouseRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminWarehouses extends Controller
 {
@@ -22,20 +23,134 @@ class StoreFeederAdminWarehouses extends Controller
     {
         $this->warehouses->ensure('Default');
 
-        $q = trim((string) $this->request->get('q', 'string', ''));
-        $activeFilter = trim((string) $this->request->get('active', 'string', ''));
-        $activeOnly = match ($activeFilter) {
-            '1' => true,
-            '0' => false,
-            default => null,
-        };
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->searchPlaceholder('Name, contact, address…')
+            ->sortable(['name', 'product_count', 'stock_units', 'po_count', 'active'])
+            ->defaultSort('name', 'asc')
+            ->filter('active', 'select', [
+                ''  => 'All statuses',
+                '1' => 'Active',
+                '0' => 'Inactive',
+            ])
+            ->columns([
+                'name'          => 'Warehouse',
+                'contact'       => 'Contact',
+                'product_count' => 'Products',
+                'stock_units'   => 'Stock',
+                'po_count'      => 'POs',
+                'active'        => 'Status',
+                'actions'       => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $activeFilter = (string) ($state['filters']['active'] ?? '');
+                $activeOnly = match ($activeFilter) {
+                    '1' => true,
+                    '0' => false,
+                    default => null,
+                };
 
-        $rows = $this->warehouses->all($q, $activeOnly);
+                $rows = $this->warehouses->all($state['q'], $activeOnly);
+                $rows = $this->sortListRows($rows, $state['sort'], $state['dir'], [
+                    'product_count' => 'int',
+                    'stock_units'   => 'int',
+                    'po_count'      => 'int',
+                    'active'        => 'bool',
+                ]);
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows, $q, $activeFilter) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $value): string => $this->view->e((string) $value);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $name = (string) $item['name'];
+                $html = '<span class="fw-semibold' . (!$item['active'] ? ' text-muted' : '') . '">'
+                    . $e($name) . '</span>';
+                if (strcasecmp($name, 'Default') === 0) {
+                    $html .= ' <span class="badge text-bg-secondary">Default</span>';
+                }
+                if ($item['company'] !== '' && $item['company'] !== $name) {
+                    $html .= '<div class="small text-muted">' . $e($item['company']) . '</div>';
+                }
+                if ($item['notes'] !== '') {
+                    $html .= '<div class="small text-muted">'
+                        . $e(mb_strimwidth((string) $item['notes'], 0, 80, '…')) . '</div>';
+                }
+                return $html;
+            },
+            'contact' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $bits = array_filter([$item['contact_name'], $item['email'], $item['phone']]);
+                return $bits !== []
+                    ? '<span class="small">' . $e(implode(' · ', $bits)) . '</span>'
+                    : '<span class="text-muted">—</span>';
+            },
+            'product_count' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['product_count'];
+                $name = (string) $item['name'];
+                if ($count <= 0) {
+                    return '<span class="text-end d-block">0</span>';
+                }
+                $url = $this->url->to('storefeeder/admin/products', ['f_warehouse' => $name]);
+                return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+            },
+            'stock_units' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['stock_units'];
+                $url = $this->url->to('storefeeder/admin/inventory', ['warehouse' => $item['name']]);
+                if ($count > 0) {
+                    return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+                }
+                return '<span class="text-end d-block">'
+                    . '<a class="text-muted text-decoration-none" href="' . $e($url) . '">0</a></span>';
+            },
+            'po_count' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $count = (int) $item['po_count'];
+                if ($count <= 0) {
+                    return '<span class="text-end d-block">0</span>';
+                }
+                $url = $this->url->to('storefeeder/admin/purchase-orders', ['warehouse' => $item['name']]);
+                return '<span class="text-end d-block"><a href="' . $e($url) . '">' . $count . '</a></span>';
+            },
+            'active' => function (array $row): string {
+                $item = $row['_row'];
+                return $item['active']
+                    ? '<span class="badge text-bg-success">Active</span>'
+                    : '<span class="badge text-bg-secondary">Inactive</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $id = (int) $item['id'];
+                $isDefault = strcasecmp((string) $item['name'], 'Default') === 0;
+                $html = '<div class="text-end text-nowrap">';
+                $html .= '<a class="btn btn-sm btn-outline-secondary" href="'
+                    . $e($this->url->to('storefeeder/admin/warehouses/edit', ['id' => $id]))
+                    . '">Edit</a> ';
+                if (!$isDefault) {
+                    $html .= '<form method="post" class="d-inline" action="'
+                        . $e($this->url->to('storefeeder/admin/warehouses/delete', ['id' => $id])) . '"'
+                        . ' onsubmit="return confirm(\'Delete this warehouse? Products and POs will move to Default.\');">';
+                    $html .= $this->request->csrfField();
+                    $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
+                    $html .= '</form>';
+                }
+                return $html . '</div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset, $e) {
             $this->view->assign('title', 'Warehouses');
             $this->view->block('right_sidebar', 'Warehouses');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">';
             echo '<div><h1 class="h3 mb-1"><i class="bi bi-building me-1"></i>Warehouses</h1>'
@@ -54,97 +169,7 @@ class StoreFeederAdminWarehouses extends Controller
             echo '</form></div></div>';
 
             echo '<div class="col-lg-8">';
-            echo '<form method="get" class="row g-2 align-items-end mb-3" action="'
-               . $e($this->url->to('storefeeder/admin/warehouses')) . '">';
-            echo '<div class="col-md-6"><label class="form-label small mb-1">Search</label>'
-               . '<input type="search" name="q" class="form-control" value="' . $e($q) . '"'
-               . ' placeholder="Name, contact, address…"></div>';
-            echo '<div class="col-md-3"><label class="form-label small mb-1">Status</label>'
-               . '<select name="active" class="form-select">';
-            foreach (['' => 'All', '1' => 'Active', '0' => 'Inactive'] as $val => $label) {
-                $sel = $activeFilter === $val ? ' selected' : '';
-                echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
-            }
-            echo '</select></div>';
-            echo '<div class="col-auto"><button class="btn btn-outline-secondary" type="submit">Apply</button>';
-            if ($q !== '' || $activeFilter !== '') {
-                echo ' <a class="btn btn-outline-secondary" href="'
-                   . $e($this->url->to('storefeeder/admin/warehouses')) . '">Reset</a>';
-            }
-            echo '</div></form>';
-
-            if ($rows === []) {
-                echo '<div class="alert alert-info mb-0">No warehouses found.</div>';
-            } else {
-                echo '<div class="small text-muted mb-2">' . count($rows) . ' warehouse(s)</div>';
-                echo '<div class="table-responsive border rounded">';
-                echo '<table class="table table-sm table-hover align-middle mb-0">';
-                echo '<thead class="table-light"><tr>'
-                   . '<th>Warehouse</th><th>Contact</th>'
-                   . '<th class="text-end">Products</th>'
-                   . '<th class="text-end">Stock</th>'
-                   . '<th class="text-end">POs</th>'
-                   . '<th>Status</th><th></th>'
-                   . '</tr></thead><tbody>';
-                foreach ($rows as $row) {
-                    $id = (int) $row['id'];
-                    $name = (string) $row['name'];
-                    $isDefault = strcasecmp($name, 'Default') === 0;
-                    $productsUrl = $this->url->to('storefeeder/admin/products', ['f_warehouse' => $name]);
-                    $stockUrl = $this->url->to('storefeeder/admin/inventory', ['warehouse' => $name]);
-                    $poUrl = $this->url->to('storefeeder/admin/purchase-orders', ['warehouse' => $name]);
-
-                    echo '<tr' . (!$row['active'] ? ' class="table-secondary"' : '') . '>';
-                    echo '<td><span class="fw-semibold">' . $e($name) . '</span>';
-                    if ($isDefault) {
-                        echo ' <span class="badge text-bg-secondary">Default</span>';
-                    }
-                    if ($row['company'] !== '' && $row['company'] !== $name) {
-                        echo '<div class="small text-muted">' . $e($row['company']) . '</div>';
-                    }
-                    if ($row['notes'] !== '') {
-                        echo '<div class="small text-muted">'
-                           . $e(mb_strimwidth($row['notes'], 0, 80, '…')) . '</div>';
-                    }
-                    echo '</td>';
-                    echo '<td class="small">';
-                    $bits = array_filter([$row['contact_name'], $row['email'], $row['phone']]);
-                    echo $bits !== [] ? $e(implode(' · ', $bits)) : '<span class="text-muted">—</span>';
-                    echo '</td>';
-                    echo '<td class="text-end">';
-                    echo (int) $row['product_count'] > 0
-                        ? '<a href="' . $e($productsUrl) . '">' . (int) $row['product_count'] . '</a>'
-                        : '0';
-                    echo '</td>';
-                    echo '<td class="text-end">';
-                    echo (int) $row['stock_units'] > 0
-                        ? '<a href="' . $e($stockUrl) . '">' . (int) $row['stock_units'] . '</a>'
-                        : '<a class="text-muted text-decoration-none" href="' . $e($stockUrl) . '">0</a>';
-                    echo '</td>';
-                    echo '<td class="text-end">';
-                    echo (int) $row['po_count'] > 0
-                        ? '<a href="' . $e($poUrl) . '">' . (int) $row['po_count'] . '</a>'
-                        : '0';
-                    echo '</td>';
-                    echo '<td>' . ($row['active']
-                        ? '<span class="badge text-bg-success">Active</span>'
-                        : '<span class="badge text-bg-secondary">Inactive</span>') . '</td>';
-                    echo '<td class="text-end text-nowrap">';
-                    echo '<a class="btn btn-sm btn-outline-secondary" href="'
-                       . $e($this->url->to('storefeeder/admin/warehouses/edit', ['id' => $id]))
-                       . '">Edit</a> ';
-                    if (!$isDefault) {
-                        echo '<form method="post" class="d-inline" action="'
-                           . $e($this->url->to('storefeeder/admin/warehouses/delete', ['id' => $id])) . '"'
-                           . ' onsubmit="return confirm(\'Delete this warehouse? Products and POs will move to Default.\');">';
-                        echo $this->request->csrfField();
-                        echo '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>';
-                        echo '</form>';
-                    }
-                    echo '</td></tr>';
-                }
-                echo '</tbody></table></div>';
-            }
+            echo $dataset->render();
             echo '</div></div>';
         });
     }
@@ -327,6 +352,29 @@ class StoreFeederAdminWarehouses extends Controller
             'notes'        => trim((string) $this->request->post('notes', 'string', '')),
             'active'       => (int) $this->request->post('active', 'int', 0) === 1,
         ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $types
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortListRows(array $rows, string $sort, string $dir, array $types = []): array
+    {
+        $mult = strtolower($dir) === 'desc' ? -1 : 1;
+        usort($rows, function (array $a, array $b) use ($sort, $mult, $types): int {
+            $va = $a[$sort] ?? '';
+            $vb = $b[$sort] ?? '';
+            $kind = $types[$sort] ?? 'string';
+            if ($kind === 'int') {
+                return $mult * ((int) $va <=> (int) $vb);
+            }
+            if ($kind === 'bool') {
+                return $mult * ((int) (bool) $va <=> (int) (bool) $vb);
+            }
+            return $mult * strcasecmp((string) $va, (string) $vb);
+        });
+        return $rows;
     }
 
     private function guardCsrf(): void

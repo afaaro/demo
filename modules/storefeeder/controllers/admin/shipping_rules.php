@@ -6,6 +6,7 @@ use Module\StoreFeeder\Services\ShippingRegionRepository;
 use Module\StoreFeeder\Services\ShippingRuleRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminShippingRules extends Controller
 {
@@ -25,9 +26,80 @@ class StoreFeederAdminShippingRules extends Controller
 
     public function indexAction(): void
     {
-        $rows = $this->rules->all();
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->sortable(['priority', 'name', 'region_name', 'enabled'])
+            ->defaultSort('priority', 'asc')
+            ->columns([
+                'priority'    => 'Priority',
+                'name'        => 'Name',
+                'region_name' => 'Region',
+                'method'      => 'Method',
+                'weight'      => 'Weight (kg)',
+                'order_total' => 'Order total',
+                'enabled'     => 'Enabled',
+                'actions'     => '',
+            ])
+            ->query(function ($db, array $state): array {
+                $rows = $this->rules->all();
+                $sort = $state['sort'];
+                $mult = strtolower($state['dir']) === 'desc' ? -1 : 1;
+                usort($rows, function (array $a, array $b) use ($sort, $mult): int {
+                    if ($sort === 'priority') {
+                        return $mult * ((int) ($a['priority'] ?? 0) <=> (int) ($b['priority'] ?? 0));
+                    }
+                    if ($sort === 'enabled') {
+                        return $mult * ((int) !empty($a['enabled']) <=> (int) !empty($b['enabled']));
+                    }
+                    return $mult * strcasecmp((string) ($a[$sort] ?? ''), (string) ($b[$sort] ?? ''));
+                });
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($rows) {
+                return [
+                    'rows'  => array_map(static fn(array $row): array => ['_row' => $row], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+        $dataset->columns([
+            'priority' => fn(array $row): string => (string) (int) $row['_row']['priority'],
+            'name' => function (array $row) use ($e): string {
+                return $e((string) ($row['_row']['name'] ?: '—'));
+            },
+            'region_name' => function (array $row) use ($e): string {
+                return $e((string) ($row['_row']['region_name'] ?: 'Any'));
+            },
+            'method' => function (array $row) use ($e): string {
+                $item = $row['_row'];
+                $label = trim((string) ($item['method_company'] ?? ''));
+                $label = ($label !== '' ? $label . ' — ' : '') . (string) ($item['method_name'] ?? '');
+                return $e($label);
+            },
+            'weight' => function (array $row) use ($e): string {
+                return $e($this->rangeLabel(
+                    $row['_row']['min_weight_kg'] ?? null,
+                    $row['_row']['max_weight_kg'] ?? null
+                ));
+            },
+            'order_total' => function (array $row) use ($e): string {
+                return $e($this->rangeLabel(
+                    $row['_row']['min_order_total'] ?? null,
+                    $row['_row']['max_order_total'] ?? null,
+                    '£'
+                ));
+            },
+            'enabled' => fn(array $row): string => !empty($row['_row']['enabled']) ? 'Yes' : 'No',
+            'actions' => function (array $row) use ($e): string {
+                return '<span class="text-end d-block"><a href="'
+                    . $e($this->url->to('storefeeder/admin/shipping-rules/edit', ['id' => (int) $row['_row']['id']]))
+                    . '">Edit</a></span>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($dataset) {
             $this->view->assign('title', 'Shipping Rules');
             $this->view->block('right_sidebar', 'Shipping');
             $e = fn(string $s): string => $this->view->e($s);
@@ -44,36 +116,7 @@ class StoreFeederAdminShippingRules extends Controller
                . '<i class="bi bi-plus-lg me-1"></i>New Shipping Rule</a>';
             echo '</div></div>';
 
-            echo '<div class="card border-0 shadow-sm"><div class="table-responsive">';
-            echo '<table class="table table-sm table-hover align-middle mb-0">';
-            echo '<thead class="table-light"><tr>'
-               . '<th>Priority</th><th>Name</th><th>Region</th><th>Method</th>'
-               . '<th>Weight (kg)</th><th>Order total</th><th>Enabled</th><th></th>'
-               . '</tr></thead><tbody>';
-            if ($rows === []) {
-                echo '<tr><td colspan="8" class="text-muted">No shipping rules yet.</td></tr>';
-            }
-            foreach ($rows as $row) {
-                $id = (int) $row['id'];
-                $methodLabel = trim((string) ($row['method_company'] ?? ''));
-                $methodLabel = ($methodLabel !== '' ? $methodLabel . ' — ' : '')
-                    . (string) ($row['method_name'] ?? '');
-                $w = $this->rangeLabel($row['min_weight_kg'] ?? null, $row['max_weight_kg'] ?? null);
-                $t = $this->rangeLabel($row['min_order_total'] ?? null, $row['max_order_total'] ?? null, '£');
-                echo '<tr>';
-                echo '<td>' . (int) $row['priority'] . '</td>';
-                echo '<td>' . $e((string) ($row['name'] ?: '—')) . '</td>';
-                echo '<td>' . $e((string) ($row['region_name'] ?: 'Any')) . '</td>';
-                echo '<td>' . $e($methodLabel) . '</td>';
-                echo '<td>' . $e($w) . '</td>';
-                echo '<td>' . $e($t) . '</td>';
-                echo '<td>' . (!empty($row['enabled']) ? 'Yes' : 'No') . '</td>';
-                echo '<td class="text-end"><a href="'
-                   . $e($this->url->to('storefeeder/admin/shipping-rules/edit', ['id' => $id]))
-                   . '">Edit</a></td>';
-                echo '</tr>';
-            }
-            echo '</tbody></table></div></div>';
+            echo $dataset->render();
         });
     }
 

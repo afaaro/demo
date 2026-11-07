@@ -2,9 +2,11 @@
 declare(strict_types=1);
 
 use Module\StoreFeeder\Services\ChannelRepository;
+use Module\StoreFeeder\Services\ListingTemplate;
 use Module\StoreFeeder\Services\ListingTemplateRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
+use System\Library\Dataset;
 
 class StoreFeederAdminListingTemplates extends Controller
 {
@@ -30,9 +32,80 @@ class StoreFeederAdminListingTemplates extends Controller
             throw new NotFoundException('Channel not found.');
         }
 
-        $rows = $this->templates->forChannel($channelId);
+        $dataset = (new Dataset($this->registry))
+            ->perPage(25)
+            ->sortable(['name', 'is_default'])
+            ->defaultSort('name', 'asc')
+            ->columns([
+                'name'            => 'Name',
+                'is_default'      => 'Default',
+                'title_template'  => 'Title template',
+                'actions'         => '',
+            ])
+            ->query(function ($db, array $state) use ($channelId): array {
+                $rows = $this->templates->forChannel($channelId);
+                $mult = strtolower($state['dir']) === 'desc' ? -1 : 1;
+                $sort = $state['sort'];
+                usort($rows, function (ListingTemplate $a, ListingTemplate $b) use ($sort, $mult): int {
+                    if ($sort === 'is_default') {
+                        return $mult * ((int) $a->isDefault <=> (int) $b->isDefault);
+                    }
+                    return $mult * strcasecmp($a->name, $b->name);
+                });
+                $total = count($rows);
+                $slice = array_slice($rows, $state['offset'], $state['per_page']);
 
-        echo $this->view->inline(function () use ($channel, $rows, $channelId) {
+                return [
+                    'rows'  => array_map(static fn(ListingTemplate $t): array => [
+                        '_template'   => $t,
+                        '_channel_id' => $channelId,
+                    ], $slice),
+                    'total' => $total,
+                ];
+            });
+
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+        $dataset->columns([
+            'name' => function (array $row) use ($e): string {
+                return '<span class="fw-semibold">' . $e($row['_template']->name) . '</span>';
+            },
+            'is_default' => fn(array $row): string => $row['_template']->isDefault
+                ? '<span class="badge text-bg-success">Default</span>'
+                : '<span class="text-muted">—</span>',
+            'title_template' => function (array $row) use ($e): string {
+                return '<span class="small text-muted">' . $e(mb_substr($row['_template']->titleTemplate, 0, 80)) . '</span>';
+            },
+            'actions' => function (array $row) use ($e): string {
+                $t = $row['_template'];
+                $channelId = (int) $row['_channel_id'];
+                $html = '<div class="text-end text-nowrap">';
+                $html .= '<a class="btn btn-sm btn-outline-primary" href="'
+                    . $e($this->url->to('storefeeder/admin/listing-templates/edit', [
+                        'id'         => $t->id,
+                        'channel_id' => $channelId,
+                    ])) . '">Edit</a> ';
+                if (!$t->isDefault) {
+                    $html .= '<form method="post" class="d-inline" action="'
+                        . $e($this->url->to('storefeeder/admin/listing-templates/set-default', [
+                            'id'         => $t->id,
+                            'channel_id' => $channelId,
+                        ])) . '">';
+                    $html .= $this->request->csrfField();
+                    $html .= '<button type="submit" class="btn btn-sm btn-outline-secondary">Make default</button></form> ';
+                }
+                $html .= '<form method="post" class="d-inline" action="'
+                    . $e($this->url->to('storefeeder/admin/listing-templates/delete', [
+                        'id'         => $t->id,
+                        'channel_id' => $channelId,
+                    ])) . '" onsubmit="return confirm(\'Delete this template?\');">';
+                $html .= $this->request->csrfField();
+                $html .= '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button></form>';
+                return $html . '</div>';
+            },
+        ]);
+
+        echo $this->view->inline(function () use ($channel, $channelId, $dataset) {
             $this->view->assign('title', 'Listing Templates');
             $this->view->block('right_sidebar', 'Integrations');
 
@@ -55,45 +128,7 @@ class StoreFeederAdminListingTemplates extends Controller
                . '<code>{{variant_name}}</code> <code>{{sku}}</code> <code>{{price}}</code> '
                . '<code>{{currency}}</code> <code>{{barcode}}</code> <code>{{image_url}}</code></p>';
 
-            if ($rows === []) {
-                echo '<div class="alert alert-info">No templates yet. Create one and mark it as default.</div>';
-                return;
-            }
-
-            echo '<div class="table-responsive"><table class="table table-sm align-middle">';
-            echo '<thead><tr><th>Name</th><th>Default</th><th>Title template</th><th></th></tr></thead><tbody>';
-            foreach ($rows as $t) {
-                echo '<tr>';
-                echo '<td class="fw-semibold">' . $this->view->e($t->name) . '</td>';
-                echo '<td>' . ($t->isDefault
-                    ? '<span class="badge text-bg-success">Default</span>'
-                    : '<span class="text-muted">—</span>') . '</td>';
-                echo '<td class="small text-muted">' . $this->view->e(mb_substr($t->titleTemplate, 0, 80)) . '</td>';
-                echo '<td class="text-end text-nowrap">';
-                echo '<a class="btn btn-sm btn-outline-primary" href="'
-                   . $this->view->e($this->url->to('storefeeder/admin/listing-templates/edit', [
-                       'id'         => $t->id,
-                       'channel_id' => $channelId,
-                   ])) . '">Edit</a> ';
-                if (!$t->isDefault) {
-                    echo '<form method="post" class="d-inline" action="'
-                       . $this->view->e($this->url->to('storefeeder/admin/listing-templates/set-default', [
-                           'id'         => $t->id,
-                           'channel_id' => $channelId,
-                       ])) . '">'
-                       . $this->request->csrfField()
-                       . '<button type="submit" class="btn btn-sm btn-outline-secondary">Make default</button></form> ';
-                }
-                echo '<form method="post" class="d-inline" action="'
-                   . $this->view->e($this->url->to('storefeeder/admin/listing-templates/delete', [
-                       'id'         => $t->id,
-                       'channel_id' => $channelId,
-                   ])) . '" onsubmit="return confirm(\'Delete this template?\');">'
-                   . $this->request->csrfField()
-                   . '<button type="submit" class="btn btn-sm btn-outline-danger">Delete</button></form>';
-                echo '</td></tr>';
-            }
-            echo '</tbody></table></div>';
+            echo $dataset->render();
         });
     }
 

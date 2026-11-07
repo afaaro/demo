@@ -11,6 +11,9 @@ use Module\StoreFeeder\Services\OrderRepository;
 use Module\StoreFeeder\Services\ReturnRepository;
 use Module\StoreFeeder\Services\SupportCaseRepository;
 use Module\StoreFeeder\Services\TenantContext;
+use Module\StoreFeeder\Services\TenantRepository;
+use Module\StoreFeeder\Services\TenantResolver;
+use Module\StoreFeeder\Services\TenantTokenRepository;
 use System\Engine\Controller;
 use System\Library\Paginator;
 
@@ -19,6 +22,7 @@ class StoreFeederAdminMessages extends Controller
     private ChannelRepository    $channels;
     private CredentialsVault     $vault;
     private ChannelClientFactory $factory;
+    private TenantResolver       $tenantResolver;
 
     protected function boot(): void
     {
@@ -31,6 +35,15 @@ class StoreFeederAdminMessages extends Controller
             (string) $this->config->get('storefeeder.credentials_key', '')
         );
         $this->factory  = new ChannelClientFactory($this->vault, $this->channels);
+        $tenants = new TenantRepository($this->db);
+        $this->tenantResolver = new TenantResolver(
+            $this->db,
+            $this->request,
+            $this->session,
+            $this->auth,
+            $tenants,
+            new TenantTokenRepository($this->db),
+        );
         // Permissions: Action.php only.
     }
 
@@ -875,7 +888,7 @@ class StoreFeederAdminMessages extends Controller
             return;
         }
 
-        $channel = $this->channels->find($channelId);
+        $channel = $this->requireMessageChannel($channelId);
         if ($channel === null || !$channel->isConnected()) {
             $this->notify->error('Channel not found or not connected.');
             redirect_to('storefeeder/admin/messages/conversations');
@@ -1174,7 +1187,7 @@ JS;
         $body      = trim((string) $this->request->post('body', 'string', ''));
         $action    = trim((string) $this->request->post('action', 'string', ''));
 
-        $channel = $this->channels->find($channelId);
+        $channel = $this->requireMessageChannel($channelId);
         if ($channel === null || !$channel->isConnected()) {
             $this->notify->error('Channel not found or not connected.');
             redirect_to('storefeeder/admin/messages/conversations');
@@ -1205,14 +1218,15 @@ JS;
                 throw new \RuntimeException('This channel cannot send messages.');
             }
             if ($channel->type === 'amazon') {
-                $client->sendMessage($convId, $convType, $body, $action);
+                $sent = $client->sendMessage($convId, $convType, $body, $action);
             } else {
-                $client->sendMessage($convId, $convType, $body);
+                $sent = $client->sendMessage($convId, $convType, $body);
             }
             $this->notify->success($channel->type === 'amazon' ? 'Message sent to buyer.' : 'Reply sent.');
 
-            // Cache the thread so the new reply shows immediately.
+            // Cache the outbound reply immediately, then refresh the thread.
             $repo = new \Module\StoreFeeder\Services\ConversationRepository($this->db);
+            $this->cacheOutboundReply($repo, $channel, $convId, $body, is_array($sent) ? $sent : []);
             $sync = new \Module\StoreFeeder\Services\ConversationSyncService(
                 $this->db,
                 $this->channels,
@@ -1255,7 +1269,7 @@ JS;
         $convId    = trim((string) $this->request->post('id',   'string', ''));
         $convType  = trim((string) $this->request->post('type', 'string', 'FROM_MEMBERS'));
 
-        $channel = $this->channels->find($channelId);
+        $channel = $this->requireMessageChannel($channelId);
         if ($channel === null || !$channel->isConnected()) {
             $this->notify->error('Channel not found or not connected.');
             redirect_to('storefeeder/admin/messages/conversations');
@@ -1455,7 +1469,7 @@ JS;
         }
 
         $channelId = (int) $this->request->post('channel_id', 'int', 0);
-        $channel   = $this->channels->find($channelId);
+        $channel   = $this->requireMessageChannel($channelId);
 
         if ($channel === null || !$channel->isConnected()) {
             $this->notify->error('Channel not found or not connected.');
@@ -1911,7 +1925,7 @@ JS;
     private function pickChannel(array $channels, int $preferredId): ?Channel
     {
         if ($preferredId > 0) {
-            $channel = $this->channels->find($preferredId);
+            $channel = $this->requireMessageChannel($preferredId);
             if ($channel !== null) {
                 return $channel;
             }
@@ -1919,11 +1933,81 @@ JS;
 
         foreach ($channels as $c) {
             if ($c->enabled && $c->isConnected()) {
-                return $c;
+                return $this->bindMessageChannel($c);
             }
         }
 
         return null;
+    }
+
+    /**
+     * Load a messaging channel and bind TenantContext + vault to its tenant.
+     * Platform owners may open another tenant's channel via findAny.
+     */
+    private function requireMessageChannel(int $channelId): ?Channel
+    {
+        if ($channelId <= 0) {
+            return null;
+        }
+
+        $channel = $this->channels->find($channelId);
+        if ($channel === null && $this->tenantResolver->isPlatformOwner()) {
+            $channel = $this->channels->findAny($channelId);
+        }
+        if ($channel === null) {
+            return null;
+        }
+
+        return $this->bindMessageChannel($channel);
+    }
+
+    private function bindMessageChannel(Channel $channel): Channel
+    {
+        $tid = (int) $channel->tenantId;
+        if ($tid > 0) {
+            $current = TenantContext::get()->has() ? (int) TenantContext::get()->id() : 0;
+            if ($current !== $tid) {
+                $this->tenantResolver->selectTenantForUser($tid);
+            }
+            $this->vault = CredentialsVault::forTenant(
+                (string) $this->config->get('storefeeder.credentials_key', ''),
+                $tid
+            );
+            $this->factory = new ChannelClientFactory($this->vault, $this->channels);
+        }
+        return $channel;
+    }
+
+    /**
+     * Persist an outbound reply even if eBay thread refresh fails.
+     *
+     * @param array<string, mixed> $sent
+     */
+    private function cacheOutboundReply(
+        \Module\StoreFeeder\Services\ConversationRepository $repo,
+        Channel $channel,
+        string $conversationId,
+        string $body,
+        array $sent,
+    ): void {
+        $messageId = trim((string) ($sent['messageId'] ?? $sent['message_id'] ?? ''));
+        if ($messageId === '') {
+            $messageId = 'local-' . bin2hex(random_bytes(8));
+        }
+
+        $seller = trim((string) ($channel->settings['ebay_username'] ?? ''));
+        try {
+            $repo->upsertMessage((int) $channel->id, $conversationId, [
+                'messageId'         => $messageId,
+                'messageBody'       => $body,
+                'senderUsername'    => $seller !== '' ? $seller : 'me',
+                'recipientUsername' => '',
+                'createdDate'       => gmdate('c'),
+                'readStatus'        => true,
+            ]);
+        } catch (\Throwable $e) {
+            error_log('Outbound reply cache failed: ' . $e->getMessage());
+        }
     }
 
     private function formatWhen(?string $at): string

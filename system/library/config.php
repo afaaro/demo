@@ -59,6 +59,10 @@ final class Config
     /**
      * Retrieve a value using dot notation: 'app.debug', 'database.host'.
      * First segment is the file key; the rest is the path inside it.
+     *
+     * Module shortcut: when system/config/{module}.php is missing but
+     * modules/{module}/config/ exists, keys resolve from that folder
+     * (app.php merges at the top level; ebay.php → storefeeder.ebay, etc.).
      */
     public function get(string $key, mixed $default = null): mixed
     {
@@ -254,6 +258,14 @@ final class Config
                         get_debug_type($data)
                     ));
                 }
+            } else {
+                // Prefer modules/{name}/config/* when system/config/{name}.php is absent.
+                $bundle = $this->loadModuleBundle($fileKey);
+                if ($bundle !== null) {
+                    $data = $bundle;
+                    $configDir = $this->findModuleConfigDir($fileKey);
+                    $filePath = ($configDir ?? $filePath) . 'app.php';
+                }
             }
 
             self::$loaded[$cacheKey] = ['path' => $filePath, 'data' => $data];
@@ -267,82 +279,50 @@ final class Config
      *
      * Examples:
      * getModule('storefeeder', 'ebay.client_id')
+     * getModule('storefeeder', 'app.platform_user_ids')
      * getModule('news', 'settings.per_page', 10)
      */
-    public function getModule(
-        string $module,
-        string $key,
-        $default = null
-    ) {
-        [$cacheKey, $subKey] = $this->resolveModuleFilePath(
-            $module,
-            $key
-        );
-
-        return $this->getValue(
-            $cacheKey,
-            $subKey,
-            $default,
-            $module . '.' . $key
-        );
-    }
-
-    /**
-     * Retrieve a value from a loaded configuration file.
-     */
-    protected function getValue(
-        string $cacheKey,
-        ?string $subKey,
-        $default,
-        string $castKey
-    ) {
-        $config = $this->loaded[$cacheKey]['data'];
+    public function getModule(string $module, string $key, mixed $default = null): mixed
+    {
+        [$cacheKey, $subKey] = $this->resolveModuleFilePath($module, $key);
 
         if ($subKey === null) {
-            return $config;
+            return self::$loaded[$cacheKey]['data'];
         }
 
-        $value = $config;
-
+        $value = self::$loaded[$cacheKey]['data'];
         foreach (explode('.', $subKey) as $segment) {
-            if (
-                !is_array($value) ||
-                !array_key_exists($segment, $value)
-            ) {
+            if (!is_array($value) || !array_key_exists($segment, $value)) {
                 return $default;
             }
-
             $value = $value[$segment];
         }
 
-        return $this->castValue($castKey, $value);
+        return $value;
     }
 
     /**
      * Find a module configuration file.
      *
-     * Example:
-     * modules/storefeeder/config/ebay.php
+     * Example: modules/storefeeder/config/ebay.php
+     *
+     * @return array{0: string, 1: ?string}
      */
-    protected function resolveModuleFilePath(
-        string $module,
-        string $key
-    ): array {
+    private function resolveModuleFilePath(string $module, string $key): array
+    {
         $this->validateName($module);
 
-        $parts = explode('.', $key, 2);
-
+        $parts   = explode('.', $key, 2);
         $fileKey = $parts[0];
-        $subKey = $parts[1] ?? null;
-
+        $subKey  = $parts[1] ?? null;
         $this->validateName($fileKey);
 
         $filePath = null;
         $moduleDirectory = null;
 
         foreach ($this->modulePaths as $modulePath) {
-            $candidateDirectory = $modulePath . $module . '/';
-            $candidateFile = $candidateDirectory . 'config/' . $fileKey . '.php';
+            $candidateDirectory = $modulePath . $module . DIRECTORY_SEPARATOR;
+            $candidateFile = $candidateDirectory . 'config' . DIRECTORY_SEPARATOR . $fileKey . '.php';
 
             if (is_file($candidateFile)) {
                 $moduleDirectory = $candidateDirectory;
@@ -350,26 +330,113 @@ final class Config
                 break;
             }
 
-            // Remember an existing module directory for new config files.
             if ($moduleDirectory === null && is_dir($candidateDirectory)) {
                 $moduleDirectory = $candidateDirectory;
             }
         }
 
-        // New non-system modules default to modules/<module>/config/.
         if ($moduleDirectory === null) {
-            $moduleDirectory = $this->modulePaths[0] . $module . '/';
+            $moduleDirectory = $this->modulePaths[0] . $module . DIRECTORY_SEPARATOR;
         }
 
         if ($filePath === null) {
-            $filePath = $moduleDirectory . 'config/' . $fileKey . '.php';
+            $filePath = $moduleDirectory . 'config' . DIRECTORY_SEPARATOR . $fileKey . '.php';
         }
 
         $cacheKey = 'module:' . $module . ':' . $fileKey;
-
         $this->loadFile($cacheKey, $filePath);
 
         return [$cacheKey, $subKey];
+    }
+
+    /**
+     * Merge modules/{module}/config/*.php into one array for Config::get('{module}.*').
+     * app.php keys sit at the top level; other files nest under their basename.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function loadModuleBundle(string $module): ?array
+    {
+        $dir = $this->findModuleConfigDir($module);
+        if ($dir === null) {
+            return null;
+        }
+
+        $files = glob($dir . '*.php') ?: [];
+        if ($files === []) {
+            return null;
+        }
+
+        $data = [];
+        sort($files);
+        foreach ($files as $file) {
+            $name = basename($file, '.php');
+            if (!preg_match('/^[a-z][a-z0-9_]*$/', $name)) {
+                continue;
+            }
+            $chunk = include $file;
+            if (!is_array($chunk)) {
+                throw new RuntimeException(sprintf(
+                    "Module config '%s' must return an array, got: %s",
+                    $file,
+                    get_debug_type($chunk)
+                ));
+            }
+            if ($name === 'app') {
+                foreach ($chunk as $k => $v) {
+                    if (!array_key_exists($k, $data)) {
+                        $data[$k] = $v;
+                    }
+                }
+            } else {
+                $data[$name] = $chunk;
+            }
+        }
+
+        return $data;
+    }
+
+    private function findModuleConfigDir(string $module): ?string
+    {
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $module)) {
+            return null;
+        }
+        foreach ($this->modulePaths as $modulePath) {
+            $dir = $modulePath . $module . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR;
+            if (is_dir($dir)) {
+                return $dir;
+            }
+        }
+        return null;
+    }
+
+    private function loadFile(string $cacheKey, string $filePath): void
+    {
+        if (isset(self::$loaded[$cacheKey])) {
+            return;
+        }
+
+        $data = [];
+        if (is_file($filePath)) {
+            $included = include $filePath;
+            if (!is_array($included)) {
+                throw new RuntimeException(sprintf(
+                    "Config file '%s' must return an array, got: %s",
+                    $filePath,
+                    get_debug_type($included)
+                ));
+            }
+            $data = $included;
+        }
+
+        self::$loaded[$cacheKey] = ['path' => $filePath, 'data' => $data];
+    }
+
+    private function validateName(string $name): void
+    {
+        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_]*$/', $name)) {
+            throw new InvalidArgumentException("Invalid config name: {$name}");
+        }
     }
 
     /**
