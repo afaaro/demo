@@ -6,7 +6,6 @@ use Module\Store\Services\ChannelClientFactory;
 use Module\Store\Services\ChannelRepository;
 use Module\Store\Services\Channels\NotSupportedException;
 use Module\Store\Services\CredentialsVault;
-use Module\Store\Services\MessageSyncService;
 use Module\Store\Services\OrderRepository;
 use Module\Store\Services\ReturnRepository;
 use Module\Store\Services\SupportCaseRepository;
@@ -62,463 +61,40 @@ class StoreAdminMessages extends Controller
     }
 
     // =========================================================================
-    // Mail Inbox / Sent — secondary (Trading GetMyMessages)
+    // Legacy mail inbox/sent (GetMyMessages) — removed from UI; redirect here.
     // =========================================================================
 
     public function mailAction(): void
     {
-        $channelId = (int) $this->request->get('channel_id', 'int', 0);
-        $folderId  = (int) $this->request->get('folder',     'int', 0);
-        $page      = max(1, (int) $this->request->get('page', 'int', 1));
-        $perPage   = 25;
-        $offset    = ($page - 1) * $perPage;
-
-        if (!in_array($folderId, [0, 1], true)) {
-            $folderId = 0;
-        }
-
-        $channels = $this->channels->all();
-
-        $channel = null;
-        if ($channelId > 0) {
-            $channel = $this->channels->find($channelId);
-        }
-        if ($channel === null) {
-            foreach ($channels as $c) {
-                if ($c->isConnected()) {
-                    $channel = $c;
-                    break;
-                }
-            }
-        }
-
-        $messages = [];
-        $total    = 0;
-        $unread   = 0;
-        $lastSync = null;
-
-        if ($channel !== null) {
-            $tid = TenantContext::get()->has() ? (int) TenantContext::get()->id() : 0;
-            if ($tid > 0) {
-                $messages = $this->db->query(
-                    "SELECT * FROM `#__store_messages`
-                      WHERE `channel_id` = ? AND `folder` = ? AND `tenant_id` = ?
-                      ORDER BY `receive_date` DESC, `id` DESC
-                      LIMIT ? OFFSET ?",
-                    [$channel->id, $folderId, $tid, $perPage, $offset]
-                )->rows;
-
-                $total = (int) $this->db->query(
-                    "SELECT COUNT(*) FROM `#__store_messages`
-                      WHERE `channel_id` = ? AND `folder` = ? AND `tenant_id` = ?",
-                    [$channel->id, $folderId, $tid]
-                )->value;
-
-                $unread = (int) $this->db->query(
-                    "SELECT COUNT(*) FROM `#__store_messages`
-                      WHERE `channel_id` = ? AND `folder` = ? AND `is_read` = 0 AND `tenant_id` = ?",
-                    [$channel->id, $folderId, $tid]
-                )->value;
-
-                $lastSync = $this->db->query(
-                    "SELECT MAX(`synced_at`) FROM `#__store_messages`
-                      WHERE `channel_id` = ? AND `folder` = ? AND `tenant_id` = ?",
-                    [$channel->id, $folderId, $tid]
-                )->value ?: null;
-            }
-        }
-
-        echo $this->view->inline(function () use (
-            $channels, $channel, $folderId, $page, $perPage,
-            $messages, $total, $unread, $lastSync
-        ) {
-            $mailTitle = $folderId === 1 ? 'Mail — Sent' : 'Mail — Inbox';
-            $this->view->assign('title', $mailTitle);
-            $this->view->block('right_sidebar', 'Messages');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
-
-            echo $this->messageListStyles();
-            echo '<div class="sf-msg">';
-            echo '<div class="sf-msg-head">';
-            echo '<h1>' . $e($mailTitle) . '</h1>';
-            echo '<div class="sf-msg-actions">';
-            if ($channel !== null) {
-                echo '<form method="post"'
-                   . ' action="' . $e($this->url->to('store/admin/messages/sync')) . '"'
-                   . ' onsubmit="return messageSyncSubmit(this, \'Fetch new mail from eBay?\');">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="channel_id" value="' . (int) $channel->id . '">';
-                echo '<input type="hidden" name="folder" value="' . (int) $folderId . '">';
-                echo '<button type="submit" class="sf-msg-btn"><i class="bi bi-arrow-clockwise"></i>Sync</button>';
-                echo '</form>';
-            }
-            echo '<a href="' . $e($this->url->to('store/admin/channels')) . '" class="sf-msg-btn">'
-               . '<i class="bi bi-plug"></i>Channels</a>';
-            echo '</div></div>';
-
-            $this->renderChannelSelector(
-                $channels,
-                $channel,
-                'store/admin/messages/mail',
-                ['folder' => $folderId]
-            );
-
-            if ($channel === null) {
-                echo '<p class="sf-msg-empty">No connected channels. '
-                   . 'Connect one on the <a href="'
-                   . $e($this->url->to('store/admin/channels'))
-                   . '">Channels</a> page.</p></div>';
-                return;
-            }
-
-            $tabKey = $folderId === 1 ? 'sent' : 'inbox';
-            $this->renderMessageTabs($channel, $tabKey, $folderId);
-
-            if ($lastSync === null) {
-                echo '<p class="sf-msg-empty">No mail stored yet. Click <strong>Sync</strong> to fetch from eBay My Messages.</p></div>';
-                return;
-            }
-
-            if (empty($messages)) {
-                echo '<p class="sf-msg-empty">No mail in this folder.</p></div>';
-                return;
-            }
-
-            echo '<section class="sf-msg-card">';
-            echo '<div class="sf-msg-meta">'
-               . 'Page ' . (int) $page . ' · '
-               . '<strong>' . number_format($total) . '</strong> total · '
-               . '<strong>' . number_format($unread) . '</strong> unread · '
-               . 'Last synced ' . $e($this->formatWhen((string) $lastSync))
-               . '</div>';
-
-            echo '<div class="table-responsive"><table class="sf-msg-table">';
-            echo '<thead><tr>'
-               . '<th class="c-when">Date</th><th class="c-from">From</th>'
-               . '<th class="c-preview">Subject</th><th class="c-item">Item</th>'
-               . '<th class="c-status">Status</th><th class="c-view"></th>'
-               . '</tr></thead><tbody>';
-
-            foreach ($messages as $m) {
-                $msgId = (string) ($m['external_id'] ?? '');
-                $subject = trim((string) ($m['subject'] ?? ''));
-                $item = trim((string) ($m['item_title'] ?? ''));
-                $isRead = !empty($m['is_read']);
-                $viewUrl = $msgId !== ''
-                    ? $this->url->to('store/admin/messages/view', [
-                        'id'         => $msgId,
-                        'channel_id' => $channel->id,
-                    ])
-                    : '';
-
-                echo '<tr' . ($isRead ? '' : ' class="is-unread"') . '>';
-                echo '<td class="c-when">' . $e($this->formatWhen((string) ($m['receive_date'] ?? ''))) . '</td>';
-                echo '<td class="c-from">' . $e((string) ($m['sender'] ?? '')) . '</td>';
-                echo '<td class="c-preview">';
-                if ($viewUrl !== '') {
-                    echo '<a class="sf-msg-preview" href="' . $e($viewUrl) . '" title="' . $e($subject) . '">'
-                       . $e($subject !== '' ? $subject : '(no subject)') . '</a>';
-                } else {
-                    echo '<span class="sf-msg-preview">' . $e($subject !== '' ? $subject : '(no subject)') . '</span>';
-                }
-                echo '</td>';
-                echo '<td class="c-item" title="' . $e($item) . '">'
-                   . ($item !== '' ? $e($item) : '<span class="sf-msg-dash">—</span>') . '</td>';
-                echo '<td class="c-status">';
-                echo $isRead
-                    ? '<span class="sf-msg-pill">Read</span>'
-                    : '<span class="sf-msg-pill is-new">New</span>';
-                if (!empty($m['is_replied'])) {
-                    echo ' <span class="sf-msg-pill is-ok">Replied</span>';
-                }
-                echo '</td>';
-                echo '<td class="c-view">';
-                if ($viewUrl !== '') {
-                    echo '<a href="' . $e($viewUrl) . '" class="sf-msg-btn">View</a>';
-                }
-                echo '</td></tr>';
-            }
-
-            echo '</tbody></table></div></section>';
-
-            $this->renderPagination($channel, $folderId, $page, $perPage, $total);
-            echo '</div>';
-
-            echo <<<'HTML'
-            <script>
-            function messageSyncSubmit(form, message) {
-                if (!confirm(message)) {
-                    return false;
-                }
-                const btn = form.querySelector('button');
-                if (btn) {
-                    btn.disabled = true;
-                    const original = btn.innerHTML;
-                    btn.innerHTML = 'Syncing…';
-                    window.addEventListener('beforeunload', function () {
-                        btn.disabled = false;
-                        btn.innerHTML = original;
-                    }, { once: true });
-                }
-                return true;
-            }
-            </script>
-            HTML;
-        });
+        $this->redirectToConversations();
     }
-
-    // =========================================================================
-    // Single message — read from local DB, fall back to API if missing
-    // =========================================================================
 
     public function viewAction(): void
     {
-        $channelId = (int) $this->request->get('channel_id', 'int', 0);
-        $messageId = trim((string) $this->request->get('id', 'string', ''));
-
-        if ($messageId === '') {
-            $this->notify->error('Message ID missing.');
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        $channel = $this->channels->find($channelId);
-        if ($channel === null) {
-            $this->notify->error('Channel not found.');
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        $tid = TenantContext::get()->has() ? (int) TenantContext::get()->id() : 0;
-        $message = $tid > 0
-            ? $this->db->first('store_messages', [
-                'channel_id'  => $channel->id,
-                'external_id' => $messageId,
-                'tenant_id'   => $tid,
-            ])
-            : [];
-
-        if ($message === []) {
-            $this->notify->error('Message not found locally. Run a sync first.');
-            redirect_to('store/admin/messages/mail', ['channel_id' => $channelId]);
-            return;
-        }
-
-        // Mark as read locally when opened (Trading API has no mark-read wired here).
-        if (empty($message['is_read'])) {
-            $this->db->update('store_messages', ['is_read' => 1], [
-                'id'        => (int) $message['id'],
-                'tenant_id' => $tid,
-            ]);
-            $message['is_read'] = 1;
-        }
-
-        $bodyMissing = trim((string) ($message['content'] ?? '')) === '';
-
-        echo $this->view->inline(function () use ($channel, $message, $bodyMissing) {
-            $this->view->assign('title', 'Message');
-            $this->view->block('right_sidebar', 'Message');
-
-            $backUrl = $this->url->to('store/admin/messages/mail', [
-                'channel_id' => $channel->id,
-                'folder'     => (int) ($message['folder'] ?? 0),
-            ]);
-
-            echo '<div class="d-flex justify-content-between align-items-center mb-4">';
-            echo '<h1 class="h4 mb-0">'
-               . $this->view->e((string) ($message['subject'] ?? '(no subject)'))
-               . '</h1>';
-            echo '<div class="d-flex gap-2">';
-
-            if ($bodyMissing) {
-                $fetchUrl = $this->url->to('store/admin/messages/fetch-body');
-                echo '<form method="post" action="' . $this->view->e($fetchUrl) . '" class="d-inline">';
-                echo $this->request->csrfField();
-                echo '<input type="hidden" name="channel_id" value="' . (int) $channel->id . '">';
-                echo '<input type="hidden" name="folder" value="' . (int) ($message['folder'] ?? 0) . '">';
-                echo '<input type="hidden" name="id" value="'
-                   . $this->view->e((string) $message['external_id']) . '">';
-                echo '<button type="submit" class="btn btn-primary">'
-                   . '<i class="bi bi-cloud-download me-1"></i>Fetch body</button>';
-                echo '</form>';
-            }
-
-            echo '<a href="' . $this->view->e($backUrl) . '" class="btn btn-outline-secondary">'
-               . '<i class="bi bi-arrow-left me-1"></i>Back</a>';
-            echo '</div>';
-            echo '</div>';
-
-            // ---- Meta table -------------------------------------------------
-            echo '<div class="card"><div class="card-body">';
-            echo '<dl class="row mb-0">';
-
-            $rows = [
-                'From'     => $message['sender']        ?? '',
-                'To'       => $message['recipient']     ?? '',
-                'Received' => $message['receive_date']  ?? '',
-                'Item'     => $message['item_title']    ?? '',
-                'Type'     => $message['message_type']  ?? '',
-                'Question' => $message['question_type'] ?? '',
-            ];
-
-            foreach ($rows as $label => $value) {
-                if ((string) $value === '') {
-                    continue;
-                }
-                echo '<dt class="col-sm-3">' . $this->view->e($label) . '</dt>';
-                echo '<dd class="col-sm-9">' . $this->view->e((string) $value) . '</dd>';
-            }
-
-            echo '</dl>';
-            echo '<hr>';
-
-            if ($bodyMissing) {
-                echo '<div class="alert alert-info mb-0">'
-                   . 'The message body has not been synced yet. '
-                   . 'Click <strong>Fetch body</strong> above to retrieve it from eBay.'
-                   . '</div>';
-            } else {
-                echo $this->renderMessageBody((string) $message['content']);
-            }
-
-            echo '</div></div>';
-        });
+        $this->redirectToConversations();
     }
 
     public function fetchBodyAction(): void
     {
-        if (!$this->request->isPost()) {
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        try {
-            $this->request->checkToken();
-        } catch (\RuntimeException $e) {
-            $this->notify->error('Session expired. Please reload.');
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        $channelId = (int) $this->request->post('channel_id', 'int', 0);
-        $folderId  = (int) $this->request->post('folder',     'int', 0);
-        $messageId = trim((string) $this->request->post('id', 'string', ''));
-
-        if (!in_array($folderId, [0, 1], true)) {
-            $folderId = 0;
-        }
-
-        if ($messageId === '') {
-            $this->notify->error('Message ID missing.');
-            redirect_to('store/admin/messages/mail', ['channel_id' => $channelId]);
-            return;
-        }
-
-        $channel = $this->channels->find($channelId);
-        if ($channel === null || !$channel->isConnected()) {
-            $this->notify->error('Channel not found or not connected.');
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        try {
-            $sync = new MessageSyncService(
-                $this->db,
-                $this->channels,
-                $this->factory,
-            );
-
-            $ok = $sync->fetchBody($channel, $folderId, $messageId);
-
-            if ($ok) {
-                $this->notify->success('Message body fetched.');
-            } else {
-                $this->notify->warning('eBay returned no body for this message.');
-            }
-        } catch (\Throwable $e) {
-            $this->notify->error('Could not fetch body: ' . $e->getMessage());
-        }
-
-        redirect_to('store/admin/messages/view', [
-            'id'         => $messageId,
-            'channel_id' => $channelId,
-        ]);
+        $this->redirectToConversations();
     }
-
-    // =========================================================================
-    // Sync — POST /store/admin/messages/sync
-    // =========================================================================
 
     public function syncAction(): void
     {
-        if (!$this->request->isPost()) {
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        try {
-            $this->request->checkToken();
-        } catch (\RuntimeException $e) {
-            $this->notify->error('Session expired. Please reload.');
-            redirect_to('store/admin/messages/mail');
-            return;
-        }
-
-        $this->runSync();
+        $this->redirectToConversations();
     }
 
-    /**
-     * Shared sync logic. Callers must already have validated POST + CSRF.
-     */
-    private function runSync(): void
+    private function redirectToConversations(): void
     {
-        $channelId = (int) $this->request->post('channel_id', 'int', 0);
-        $folderId  = (int) $this->request->post('folder',     'int', 0);
-
-        if (!in_array($folderId, [0, 1], true)) {
-            $folderId = 0;
+        $params = [];
+        $channelId = (int) $this->request->get('channel_id', 'int', 0);
+        if ($channelId <= 0) {
+            $channelId = (int) $this->request->post('channel_id', 'int', 0);
         }
-
-        $channel = $this->channels->find($channelId);
-        if ($channel === null || !$channel->isConnected()) {
-            $this->notify->error('Channel not found or not connected.');
-            redirect_to('store/admin/messages/mail');
-            return;
+        if ($channelId > 0) {
+            $params['channel_id'] = $channelId;
         }
-
-        @set_time_limit(120);
-
-        try {
-            $sync = new MessageSyncService(
-                $this->db,
-                $this->channels,
-                $this->factory,
-            );
-
-            // Keep web sync short — host proxies kill long PHP requests.
-            $result = $sync->syncChannel($channel, $folderId, 3);
-
-            $msg = sprintf(
-                'Synced %s: %d new, %d updated across %d page(s).',
-                $channel->label,
-                $result['created'],
-                $result['updated'],
-                $result['pages'],
-            );
-
-            if (!empty($result['truncated'])) {
-                $this->notify->warning($msg . ' More messages exist — run sync again.');
-            } else {
-                $this->notify->success($msg);
-            }
-        } catch (\Throwable $e) {
-            $this->notify->error('Sync failed: ' . $e->getMessage());
-        }
-
-        redirect_to('store/admin/messages/mail', [
-            'channel_id' => $channelId,
-            'folder'     => $folderId,
-        ]);
+        redirect_to('store/admin/messages/conversations', $params);
     }
 
     // =========================================================================
@@ -561,7 +137,7 @@ class StoreAdminMessages extends Controller
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">';
             echo '<h1 class="h3 mb-0">Debug: eBay GetMyMessages</h1>';
-            echo '<a href="' . $this->view->e($this->url->to('store/admin/messages/mail'))
+            echo '<a href="' . $this->view->e($this->url->to('store/admin/messages/conversations'))
                . '" class="btn btn-outline-secondary">'
                . '<i class="bi bi-arrow-left me-1"></i>Back</a>';
             echo '</div>';
@@ -819,63 +395,6 @@ class StoreAdminMessages extends Controller
         echo '</div>';
     }
 
-    /**
-     * Tabs: Conversations first, then secondary Mail folders.
-     */
-    private function renderMessageTabs(Channel $channel, string $current, int $folderId): void
-    {
-        $tabs = [
-            [
-                'key'   => 'conversations',
-                'label' => 'Conversations',
-                'icon'  => 'chat-dots',
-                'url'   => $this->url->to('store/admin/messages/conversations', [
-                    'channel_id' => $channel->id,
-                ]),
-            ],
-            [
-                'key'   => 'inbox',
-                'label' => 'Mail inbox',
-                'icon'  => 'inbox',
-                'url'   => $this->url->to('store/admin/messages/mail', [
-                    'channel_id' => $channel->id,
-                    'folder'     => 0,
-                ]),
-            ],
-            [
-                'key'   => 'sent',
-                'label' => 'Mail sent',
-                'icon'  => 'send',
-                'url'   => $this->url->to('store/admin/messages/mail', [
-                    'channel_id' => $channel->id,
-                    'folder'     => 1,
-                ]),
-            ],
-        ];
-
-        echo '<nav class="sf-msg-tabs">';
-        foreach ($tabs as $t) {
-            $on = ($t['key'] === $current) ? ' is-on' : '';
-            echo '<a class="' . $on . '" href="' . $this->view->e($t['url']) . '">'
-               . '<i class="bi bi-' . $t['icon'] . '"></i>'
-               . $this->view->e($t['label'])
-               . '</a>';
-        }
-        echo '</nav>';
-    }
-
-    private function renderPagination(Channel $channel, int $folderId, int $page, int $perPage, int $total): void
-    {
-        echo Paginator::make($total, $page, $perPage)->render(
-            fn (int $p) => $this->url->to('store/admin/messages/mail', [
-                'channel_id' => $channel->id,
-                'folder'     => $folderId,
-                'page'       => $p,
-            ]),
-            ['theme' => 'bootstrap']
-        );
-    }
-
     public function conversationAction(): void
     {
         $channelId = (int) $this->request->get('channel_id', 'int', 0);
@@ -904,7 +423,7 @@ class StoreAdminMessages extends Controller
         }
 
         $repo            = new \Module\Store\Services\ConversationRepository($this->db);
-        $messages        = $repo->messagesFor((int) $channel->id, $convId);
+        $messages        = $repo->messagesFor((int) $channel->id, $convId, (int) $channel->tenantId);
         $autoFetchError  = null;
         $autoFetched     = false;
 
@@ -918,7 +437,7 @@ class StoreAdminMessages extends Controller
                     $repo,
                 );
                 $sync->syncThread($channel, $convId, $convType);
-                $messages    = $repo->messagesFor((int) $channel->id, $convId);
+                $messages    = $repo->messagesFor((int) $channel->id, $convId, (int) $channel->tenantId);
                 $autoFetched = $messages !== [];
             } catch (\Throwable $e) {
                 $autoFetchError = $e->getMessage();
@@ -1324,17 +843,20 @@ JS;
         $lastSync      = null;
 
         if ($channel !== null) {
-            $conversations = $repo->paginate((int) $channel->id, $perPage, $offset);
-            $total         = $repo->count((int) $channel->id);
-            $unreadTotal   = $repo->countUnread((int) $channel->id);
+            // Always scope by the channel's tenant — not ambient "Working in".
+            $tid = (int) $channel->tenantId;
+            $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid);
+            $total         = $repo->count((int) $channel->id, $tid);
+            $unreadTotal   = $repo->countUnread((int) $channel->id, $tid);
+            $lastSync      = $repo->lastSyncedAt((int) $channel->id, $tid);
 
-            $tid = TenantContext::get()->has() ? (int) TenantContext::get()->id() : 0;
-            if ($tid > 0) {
-                $lastSync = $this->db->query(
-                    "SELECT MAX(`synced_at`) FROM `#__store_conversations`
-                      WHERE `channel_id` = ? AND `tenant_id` = ?",
-                    [$channel->id, $tid]
-                )->value ?: null;
+            // If rows exist under a drifted tenant_id, repair then reload once.
+            if ($conversations === [] && $tid > 0) {
+                $repo->rebindChannelTenant((int) $channel->id, $tid);
+                $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid);
+                $total         = $repo->count((int) $channel->id, $tid);
+                $unreadTotal   = $repo->countUnread((int) $channel->id, $tid);
+                $lastSync      = $repo->lastSyncedAt((int) $channel->id, $tid);
             }
         }
 
@@ -1375,15 +897,8 @@ JS;
                 return;
             }
 
-            $this->renderMessageTabs($channel, 'conversations', 0);
-
-            if ($lastSync === null) {
+            if ($total === 0 || empty($conversations)) {
                 echo '<p class="sf-msg-empty">No conversations stored yet. Click <strong>Sync</strong> to fetch buyer threads from eBay.</p></div>';
-                return;
-            }
-
-            if (empty($conversations)) {
-                echo '<p class="sf-msg-empty">No conversations stored.</p></div>';
                 return;
             }
 
@@ -1488,26 +1003,36 @@ JS;
                 $repo,
             );
 
-            // Headers only, 2 pages max (~100 threads) so the web request stays fast.
-            // Open a thread (or Refresh) to load messages; Sync again for older pages.
+            // Headers + a few newest threads so Sync doesn't leave empty conversations.
+            // Open a thread (or Refresh) for full history; Sync again for older pages.
             $syncType = match ($channel->type) {
                 'amazon' => 'AMAZON_ORDER',
                 'bnq'    => 'BNQ_THREAD',
                 default  => 'FROM_MEMBERS',
             };
-            $result = $sync->syncChannel($channel, $syncType, 0, 2);
+            $result = $sync->syncChannel($channel, $syncType, 10, 5);
 
-            $msg = sprintf(
-                'Synced conversations: %d new, %d updated across %d page(s). Open a thread to load messages.',
-                $result['created'],
-                $result['updated'],
-                $result['pages'],
-            );
-
-            if (!empty($result['truncated'])) {
-                $this->notify->warning($msg . ' More exist — run sync again.');
+            if ((int) ($result['pages'] ?? 0) === 0
+                && (int) ($result['created'] ?? 0) === 0
+                && (int) ($result['updated'] ?? 0) === 0
+            ) {
+                $this->notify->warning(
+                    'Sync finished but eBay returned no conversations. Existing threads were left unchanged.'
+                );
             } else {
-                $this->notify->success($msg);
+                $msg = sprintf(
+                    'Synced conversations: %d new, %d updated, %d message(s) across %d page(s).',
+                    $result['created'],
+                    $result['updated'],
+                    $result['messages'],
+                    $result['pages'],
+                );
+
+                if (!empty($result['truncated'])) {
+                    $this->notify->warning($msg . ' More exist — run sync again.');
+                } else {
+                    $this->notify->success($msg);
+                }
             }
         } catch (\Throwable $e) {
             $this->notify->error('Sync failed: ' . $e->getMessage());
@@ -2029,10 +1554,6 @@ JS;
 .sf-msg-actions{display:flex;gap:.45rem;align-items:center}
 .sf-msg-btn{display:inline-flex;align-items:center;gap:.35rem;height:2.05rem;padding:0 .75rem;border:1px solid #d1d5db;border-radius:.45rem;background:#fff;color:#374151;font-size:.8rem;font-weight:600;text-decoration:none}
 .sf-msg-btn:hover{background:#f3f4f6;color:#111827}
-.sf-msg-tabs{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap;margin:0 0 .85rem}
-.sf-msg-tabs a{display:inline-flex;align-items:center;gap:.35rem;color:#6b7280;text-decoration:none;padding:.35rem .7rem;border-radius:999px;font-size:.84rem;font-weight:600}
-.sf-msg-tabs a:hover{background:#f3f4f6;color:#111827}
-.sf-msg-tabs a.is-on{background:#dbeafe;color:#1d4ed8}
 .sf-msg-empty{margin:0;padding:1rem;background:#fff;border:1px solid #e5e7eb;border-radius:.7rem;color:#6b7280;font-size:.84rem}
 .sf-msg-card{background:#fff;border:1px solid #e5e7eb;border-radius:.7rem;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)}
 .sf-msg-meta{padding:.65rem 1rem;border-bottom:1px solid #eef0f3;font-size:.8rem;color:#6b7280}

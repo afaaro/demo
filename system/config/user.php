@@ -8,5 +8,8 @@ return [
     'min_form_seconds'  => 5,
 
     // Group name assigned to new public registrations (must exist in user_groups).
-    'default_group'     => 'users',
+    'default_group'     => 'authenticated',
+
+    // When group/user privileges change, refresh permissions in-session instead of signing people out.
+    'force_logout_on_privilege_change' => false,
 ];

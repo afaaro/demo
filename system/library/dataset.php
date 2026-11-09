@@ -23,6 +23,8 @@ class Dataset
     private int $perPage = 10;
     private array $select = ['*'];
     private string $searchPlaceholder = 'Search...';
+    /** @var array<string, string> Extra query params kept across search/filter/clear/sort/pagination. */
+    private array $preserve = [];
 
     public function __construct(protected readonly Registry $registry) {}
 
@@ -120,6 +122,33 @@ class Dataset
         return $this;
     }
 
+    /**
+     * Keep extra query params (e.g. view, tab, saved_filter) across Dataset navigation.
+     *
+     * @param array<string, scalar|null> $params
+     */
+    public function preserve(array $params): self
+    {
+        foreach ($params as $name => $value) {
+            $name = trim((string) $name);
+            if ($name === '' || !preg_match('/^[a-zA-Z][a-zA-Z0-9_]*$/', $name)) {
+                continue;
+            }
+            if (in_array($name, self::RESERVED, true) || isset($this->filters[$name])) {
+                continue;
+            }
+            if ($value === null || $value === '') {
+                unset($this->preserve[$name]);
+                continue;
+            }
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $this->preserve[$name] = (string) $value;
+        }
+        return $this;
+    }
+
     public function render(): string
     {
         // $reflection = new \ReflectionClass($this);
@@ -147,6 +176,7 @@ class Dataset
             $table->setColumnSearch($this->columnSearchValues($state['columns']));
             $table->setSortable($this->sortable, $state['sort'], $state['dir']);
             $table->setFiltered($this->isFiltered($state));
+            $table->setPreserve($this->preserve);
 
             $html = $table->render();
 
@@ -434,5 +464,6 @@ class Dataset
         $this->perPage = 10;
         $this->select = ['*'];
         $this->searchPlaceholder = 'Search...';
+        $this->preserve = [];
     }
 }

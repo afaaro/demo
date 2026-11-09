@@ -84,6 +84,9 @@
       ? crypto.randomUUID()
       : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
 
+    var isVideo = (file.type || '').indexOf('video/') === 0
+      || /\.(mp4|webm|mkv|avi|mov|m4v)$/i.test(file.name || '');
+
     for (var i = 0; i < total; i++) {
       var slice = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize));
       var fd = new FormData();
@@ -94,6 +97,11 @@
         + '&index=' + i
         + '&total=' + total
         + '&filename=' + encodeURIComponent(file.name);
+
+      // Last chunk assembles (and may ffmpeg-compress) on the server.
+      if (i === total - 1 && label) {
+        label.textContent = isVideo ? 'Compressing…' : 'Finalizing…';
+      }
 
       var res = await fetch(url, {
         method: 'POST',
@@ -107,7 +115,9 @@
       }
       var pct = Math.round(((i + 1) / total) * 100);
       if (fill) fill.style.width = pct + '%';
-      if (label) label.textContent = 'Uploading… ' + pct + '%';
+      if (label && i < total - 1) {
+        label.textContent = 'Uploading… ' + pct + '%';
+      }
 
       if (data.completed) {
         if (label) label.textContent = 'Saving…';

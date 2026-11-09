@@ -240,6 +240,39 @@ final class CommentRepository
                     ];
                 }
             }
+
+            if ($module === 'community' && $entityType === 'post') {
+                $row = $this->db->query(
+                    "SELECT p.`id`, p.`body`, p.`visibility`, p.`status`,
+                            COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                       FROM `#__community_posts` p
+                       LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+                      WHERE p.`id` = ?
+                      LIMIT 1",
+                    [(int) $entityId]
+                )->row;
+                if ($row !== []) {
+                    $url = url('community/post', ['id' => (int) $row['id']]);
+                    // Never leak friends-only body text into public hubs.
+                    if (($row['status'] ?? '') !== 'visible' || ($row['visibility'] ?? '') !== 'public') {
+                        return [
+                            'title' => 'Community post',
+                            'url'   => $url,
+                        ];
+                    }
+                    $body = trim((string) ($row['body'] ?? ''));
+                    if ($body === '') {
+                        $body = 'Photo post';
+                    }
+                    if (mb_strlen($body) > 80) {
+                        $body = mb_substr($body, 0, 79) . '…';
+                    }
+                    return [
+                        'title' => (string) $row['author_name'] . ': ' . $body,
+                        'url'   => $url,
+                    ];
+                }
+            }
         } catch (\Throwable) {
             // Entity table may be missing.
         }
@@ -273,11 +306,56 @@ final class CommentRepository
                 )->row;
                 return $row !== [];
             }
+            if ($module === 'community' && $entityType === 'post') {
+                $row = $this->db->query(
+                    "SELECT 1 AS ok FROM `#__community_posts`
+                      WHERE `id` = ? AND `status` = 'visible' LIMIT 1",
+                    [(int) $entityId]
+                )->row;
+                return $row !== [];
+            }
         } catch (\Throwable) {
             return false;
         }
 
         return false;
+    }
+
+    /**
+     * Whether the viewer may list/post comments on this entity.
+     * Community posts require PostRepository::canView (friends-only aware).
+     */
+    public function viewerCanAccess(
+        string $module,
+        string $entityType,
+        string $entityId,
+        ?int $viewerId,
+    ): bool {
+        $module = $this->sanitizeKey($module);
+        $entityType = $this->sanitizeKey($entityType);
+        $entityId = trim($entityId);
+        if ($module === '' || $entityType === '' || $entityId === '') {
+            return false;
+        }
+
+        try {
+            if ($module === 'community' && $entityType === 'post') {
+                if (!class_exists(\Module\Community\Services\PostRepository::class)) {
+                    return false;
+                }
+                $posts = new \Module\Community\Services\PostRepository($this->db);
+                $friends = new \Module\Community\Services\FriendshipRepository($this->db);
+                $post = $posts->find((int) $entityId);
+                if ($post === null) {
+                    return false;
+                }
+                return $posts->canView($post, (int) ($viewerId ?? 0), $friends);
+            }
+
+            return $this->entityExists($module, $entityType, $entityId);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function sanitizeKey(string $value): string

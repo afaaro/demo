@@ -86,7 +86,7 @@ class StoreAdminProducts extends Controller
         $this->bundles    = new ProductBundleRepository($this->db);
         $this->purchaseOrders = new PurchaseOrderRepository($this->db);
         $this->savedFilters   = new ProductSavedFilterRepository($this->db);
-        $this->view->addThemeStyle('css/modules/products.css');
+        $this->view->addModuleStyle('store', 'products.css');
         // Permissions: Action.php only.
     }
 

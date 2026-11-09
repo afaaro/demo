@@ -14,7 +14,19 @@
     <?php endforeach; ?>
     <title><?= $view->e($view->pageTitle((string) ($title ?? 'soomaali.net'))) ?></title>
     <link rel="canonical" href="<?= $view->e((string) $view->request->url()) ?>">
-    <link rel="icon" href="<?= $view->asset('img/favicon.ico') ?>">
+    <link rel="icon" href="<?= $view->asset('img/favicon.svg') ?>" type="image/svg+xml">
+    <script>
+    (function () {
+        try {
+            var t = localStorage.getItem('site.theme');
+            if (t === 'dark' || t === 'light') {
+                document.documentElement.setAttribute('data-theme', t);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        } catch (e) {}
+    })();
+    </script>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
       integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
@@ -80,7 +92,7 @@ $user     = $view->user->current();
 
         <main id="main-content" class="site-main">
             <?= $view->notify->display() ?>
-            <?= $content ?? '' ?>   <!-- ← correct for render() -->
+            <?= $content ?? '' ?>
         </main>
 
         <?php if ($hasRight): ?>
@@ -103,7 +115,9 @@ $user     = $view->user->current();
     <?php endif; ?>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+        crossorigin="anonymous"></script>
 <script src="<?= $view->asset('js/main.js') ?>" defer></script>
 <?php foreach ($view->getScripts('footer') as $src): ?>
 <script src="<?= $view->e($src) ?>" defer></script>

@@ -75,7 +75,7 @@ $embed = ($type === 'embed' || ($source !== '' && media_parse_external_url($sour
       <?php
         require_once get_module_path('comments') . '/helpers/functions.php';
         echo comments_render('media', 'video', $id, [
-            'login_query' => ['next' => 'media/watch', 'id' => $id],
+            'login_query' => ['next' => 'media/watch/' . ltrim((string) $id, '/')],
         ]);
       ?>
     </div>

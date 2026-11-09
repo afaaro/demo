@@ -51,7 +51,12 @@ final class AdminToolbar
         }
         if (str_ends_with($perm, '.view')) {
             $module = substr($perm, 0, -strlen('.view'));
-            return $module !== '' && User::canModuleCurrent($module);
+            // Staff gates only — not canModule() (that matches front-end perms).
+            return $module !== '' && (
+                User::canCurrent($module . '.*')
+                || User::canCurrent($module . '.view')
+                || User::canCurrent($module . '.admin')
+            );
         }
         return false;
     }
@@ -71,6 +76,7 @@ final class AdminToolbar
         }
 
         $children = [];
+        $keptActions = 0;
         foreach ($item['children'] as $child) {
             if (!is_array($child)) {
                 continue;
@@ -81,10 +87,12 @@ final class AdminToolbar
             }
             if ($this->childVisible($child)) {
                 $children[] = $child;
+                $keptActions++;
             }
         }
         $item['children'] = $children;
-        if ($children === []) {
+        // Drop parents that only kept dividers/headers (empty-looking dropdowns).
+        if ($keptActions === 0) {
             return null;
         }
         return $item;

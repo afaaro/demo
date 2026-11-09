@@ -280,9 +280,18 @@ class Form
                                         var card = document.createElement('button');
                                         card.type = 'button';
                                         card.style.cssText = 'border:1px solid #e5e7eb;border-radius:6px;padding:6px;background:#fff;cursor:pointer;text-align:left;';
-                                        card.innerHTML =
-                                            '<img src=\"' + item.url + '\" style=\"width:100%;height:100px;object-fit:cover;border-radius:4px;display:block;margin-bottom:6px;\" alt=\"\">'
-                                        + '<div style=\"font-size:12px;color:#666;word-break:break-all;\">' + item.filename + '</div>';
+
+                                        var img = document.createElement('img');
+                                        img.src = String(item.url || '');
+                                        img.alt = '';
+                                        img.style.cssText = 'width:100%;height:100px;object-fit:cover;border-radius:4px;display:block;margin-bottom:6px;';
+
+                                        var label = document.createElement('div');
+                                        label.style.cssText = 'font-size:12px;color:#666;word-break:break-all;';
+                                        label.textContent = String(item.filename || '');
+
+                                        card.appendChild(img);
+                                        card.appendChild(label);
 
                                         card.addEventListener('click', function () {
                                             callback(item.url, { alt: item.filename });

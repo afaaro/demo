@@ -24,7 +24,7 @@ $isActive = static function (string $route) use ($currentRoute): bool {
     <nav class="site-nav" aria-label="Primary">
 
         <!-- Logo -->
-        <a href="<?= $view->e(BASEURL) ?>" class="site-nav__logo">
+        <a href="<?= $view->e(get_base_url()) ?>" class="site-nav__logo">
             <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i>
             <span class="site-nav__brand"><?= $view->e($view->config->get('meta.site_name', 'My Site')) ?></span>
         </a>
@@ -68,6 +68,15 @@ $isActive = static function (string $route) use ($currentRoute): bool {
 
         <!-- Auth area -->
         <?php $currentUser = $view->auth->current(); ?>
+
+        <button type="button"
+                class="site-theme-toggle"
+                data-theme-toggle
+                aria-label="Toggle color theme"
+                title="Toggle color theme">
+            <i class="bi bi-moon-stars" data-theme-icon-dark aria-hidden="true"></i>
+            <i class="bi bi-sun" data-theme-icon-light aria-hidden="true"></i>
+        </button>
 
         <div class="site-nav__user">
             <?php if ($currentUser !== null): ?>

@@ -15,8 +15,8 @@ class UserAdminUsers extends Controller
     protected function boot(): void
     {
         if (!$this->auth->check()) {
-            $this->session->set('redirect_after_login', $this->url->to('user/admin/users'));
-            redirect_to('user/login');
+            $this->session->set('redirect_after_login', 'user/admin/users');
+            redirect_to('user/login', ['next' => 'user/admin/users']);
             return;
         }
         // Permissions: Action.php only (user.admin.users.*).

@@ -1,0 +1,56 @@
+###############################################
+# MediaMTX example for soomaali livestream module
+# Copy to C:\mediamtx\mediamtx.yml and keep on-online.bat / on-offline.bat beside it.
+# Wirecast/OBS may publish H.265; ffmpeg writes {path}_h264 for the website.
+###############################################
+
+logLevel: info
+
+# Global packet queue (root-level on MediaMTX v1.x).
+writeQueueSize: 1024
+
+api: yes
+apiAddress: :9997
+
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: fmp4
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAllowOrigins: ["*"]
+hlsCDNSecret: "soomaali-hls-proxy-secret"
+
+srt: yes
+srtAddress: :8890
+
+# Local RTSP for ffmpeg transcoder only (do not port-forward 8554)
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+
+# Phone / OBS RTMP — forward TCP 1935 on the router
+rtmp: yes
+rtmpAddress: :1935
+
+webrtc: no
+moq: no
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1/demo/index.php?route=livestream/webhook
+authHTTPExclude:
+  - action: read
+  - action: playback
+  - action: api
+  - action: metrics
+  - action: pprof
+
+pathDefaults:
+  source: publisher
+  overridePublisher: true
+  # on-online.bat must NOT use "timeout ... >nul" (stdin redirect breaks under MediaMTX).
+  runOnOnline: cmd /c C:\mediamtx\on-online.bat
+  runOnOffline: cmd /c C:\mediamtx\on-offline.bat
+
+paths:
+  all_others:

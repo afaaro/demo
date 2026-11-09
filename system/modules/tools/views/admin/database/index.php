@@ -140,6 +140,21 @@ use ToolsAdminDatabase as DbAdmin;
                         onclick="return confirm('Download SQL export for selected tables (or all if none selected)?');">
                     <i class="bi bi-download me-1"></i>Export SQL
                 </button>
+                <button type="submit" formaction="<?= $view->e($view->url->to('tools/admin/database/drop')) ?>"
+                        class="btn btn-sm btn-outline-danger"
+                        onclick="return (function (btn) {
+                            var form = btn.form;
+                            var selected = form.querySelectorAll('.db-table-cb:checked');
+                            if (!selected.length) {
+                                alert('Select at least one table to drop.');
+                                return false;
+                            }
+                            var names = Array.prototype.map.call(selected, function (c) { return c.value; }).slice(0, 8).join(', ');
+                            var extra = selected.length > 8 ? ' … +' + (selected.length - 8) + ' more' : '';
+                            return confirm('DROP ' + selected.length + ' table(s)?\n\n' + names + extra + '\n\nThis cannot be undone.');
+                        })(this)">
+                    <i class="bi bi-trash me-1"></i>Drop selected
+                </button>
                 <span class="small text-muted align-self-center ms-1">Select tables for actions; export with none selected dumps everything.</span>
             </div>
 

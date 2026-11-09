@@ -22,9 +22,10 @@ class CommentsAdmin extends Controller
             ->heading('Comments')
             ->searchPlaceholder('Body, user, or entity id…')
             ->filter('module', 'select', [
-                ''      => 'All modules',
-                'media' => 'Media',
-                'news'  => 'News',
+                ''          => 'All modules',
+                'media'     => 'Media',
+                'news'      => 'News',
+                'community' => 'Community',
             ])
             ->filter('status', 'select', [
                 ''        => 'Visible + hidden',

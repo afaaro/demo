@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/community",
+    "description": "Facebook-style community feed with friends, posts, reactions, and notifications.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Community"
+    }
+}

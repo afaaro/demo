@@ -1,0 +1,303 @@
+/* =========================================================
+   Admin toolbar — fixed top strip
+   =========================================================
+   Owns the z-index scale and the --admin-toolbar-h variable.
+   Requires: bootstrap-icons (for the caret glyph).
+   ========================================================= */
+
+:root {
+    --admin-toolbar-h: 50px;
+    --admin-toolbar-bg: #1e1e2d;
+    --admin-toolbar-bg-2: #171725;
+    --admin-toolbar-fg: #d9dce4;
+    --admin-toolbar-fg-strong: #ffffff;
+    --admin-toolbar-hover: rgba(255, 255, 255, 0.10);
+    --admin-toolbar-divider: rgba(255, 255, 255, 0.08);
+    --admin-toolbar-danger: #dc2626;
+    --admin-toolbar-radius: 6px;
+    --admin-toolbar-transition: 160ms cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Layered z-index scale — toolbar sits above everything. */
+    --z-toolbar: 1060;
+    --z-sidebar: 1040;
+    --z-backdrop: 1035;
+    --z-topbar: 1030;
+}
+
+/* =========================================================
+   Toolbar bar
+   ========================================================= */
+
+.admin-toolbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: var(--z-toolbar);
+    height: var(--admin-toolbar-h);
+    display: flex;
+    align-items: center;
+    background: linear-gradient(180deg, var(--admin-toolbar-bg), var(--admin-toolbar-bg-2));
+    color: var(--admin-toolbar-fg);
+    font-size: 13px;
+    box-shadow:
+        0 1px 0 var(--admin-toolbar-divider),
+        0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.admin-toolbar__inner {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    height: 100%;
+    padding: 0 12px;
+    /* No scroll on desktop — dropdowns must float freely.
+       Horizontal scroll only kicks in on mobile (see media query). */
+    overflow: visible;
+}
+
+/* Push items to the right when a spacer is used */
+.admin-toolbar__spacer { flex: 1 1 auto; }
+
+/* =========================================================
+   Links & brand
+   ========================================================= */
+
+.admin-toolbar__brand,
+.admin-toolbar__link {
+    color: var(--admin-toolbar-fg);
+    height: 30px;
+    padding: 0 10px;
+    text-decoration: none;
+    border-radius: var(--admin-toolbar-radius);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: 0;
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    transition:
+        background var(--admin-toolbar-transition),
+        color var(--admin-toolbar-transition);
+}
+
+.admin-toolbar__brand {
+    font-weight: 600;
+    color: var(--admin-toolbar-fg-strong);
+    padding-right: 14px;
+    margin-right: 6px;
+    border-right: 1px solid var(--admin-toolbar-divider);
+    border-radius: 0;
+    height: 100%;
+}
+
+.admin-toolbar__brand:hover { color: #fff; }
+
+.admin-toolbar__brand i,
+.admin-toolbar__link i {
+    font-size: 14px;
+    line-height: 1;
+    opacity: .95;
+}
+
+.admin-toolbar__link:hover,
+.admin-toolbar__link:focus-visible {
+    background: var(--admin-toolbar-hover);
+    color: var(--admin-toolbar-fg-strong);
+    outline: none;
+}
+
+.admin-toolbar__link:focus-visible {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.55);
+}
+
+.admin-toolbar__link.is-active {
+    background: rgba(59, 130, 246, 0.20);
+    color: #fff;
+}
+
+.admin-toolbar__link--danger:hover,
+.admin-toolbar__link--danger:focus-visible {
+    background: var(--admin-toolbar-danger);
+    color: #fff;
+}
+
+/* =========================================================
+   Body offset — single source of truth
+   =========================================================
+   Frontend (.site-body) handles its own calc() gutter in main.css.
+   Admin shell pages that include the toolbar use the rules below.
+   ========================================================= */
+
+body.has-admin-toolbar:not(.site-body) {
+    padding-top: var(--admin-toolbar-h);
+}
+
+/* Admin shell (if present) sits flush under the toolbar */
+body.has-admin-toolbar .admin-shell {
+    min-height: calc(100vh - var(--admin-toolbar-h));
+}
+
+body.has-admin-toolbar .admin-sidebar {
+    top: var(--admin-toolbar-h);
+    height: calc(100vh - var(--admin-toolbar-h));
+}
+
+/* =========================================================
+   Dropdowns / submenus
+   ========================================================= */
+
+.admin-toolbar .dropdown-menu {
+    font-size: 13px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    box-shadow: 0 10px 30px rgba(16, 24, 40, 0.14);
+    padding: 6px;
+    margin-top: 6px;
+    min-width: 200px;
+}
+
+.admin-toolbar .dropdown-item {
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.admin-toolbar .dropdown-item:active {
+    background: var(--admin-toolbar-hover);
+    color: inherit;
+}
+
+.admin-toolbar .dropdown-submenu { position: relative; }
+
+/* Caret pointing right on submenu parents */
+.admin-toolbar .dropdown-submenu > .dropdown-item::after {
+    content: "\F285"; /* bi-chevron-right */
+    font-family: "bootstrap-icons";
+    margin-left: auto;
+    font-size: 11px;
+    opacity: .55;
+}
+
+.admin-toolbar .dropdown-submenu > .dropdown-menu {
+    top: 0;
+    left: 100%;
+    margin-top: -6px;
+    margin-left: -1px;
+    display: none;
+}
+
+.admin-toolbar .dropdown-submenu > .dropdown-menu.show,
+.admin-toolbar .dropdown-submenu:focus-within > .dropdown-menu {
+    display: block;
+}
+
+/* Hover bridge so the submenu doesn't disappear between parent & child */
+.admin-toolbar .dropdown-submenu::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: -6px;
+    width: 6px;
+    height: 100%;
+}
+
+/* Flip submenu to the left when it would overflow the viewport */
+.admin-toolbar .dropdown-submenu.dropstart > .dropdown-menu {
+    left: auto;
+    right: 100%;
+    margin-left: 0;
+    margin-right: -1px;
+}
+
+/* =========================================================
+   Mobile
+   ========================================================= */
+
+@media (max-width: 767.98px) {
+    :root { --admin-toolbar-h: 44px; }
+
+    .admin-toolbar { font-size: 12.5px; }
+
+    .admin-toolbar__inner {
+        padding: 0 8px;
+        gap: 2px;
+        /* Horizontal scroll for dense toolbars. Note: overflow-x:auto
+           forces overflow-y to compute as auto too, which clips dropdowns
+           on touch — see :has(.show) override below + fixed Popper. */
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .admin-toolbar__inner::-webkit-scrollbar { display: none; }
+
+    /* While a dropdown is open, stop clipping the menu (iOS/Android tap). */
+    .admin-toolbar:has(.dropdown-menu.show) {
+        overflow: visible;
+    }
+
+    .admin-toolbar:has(.dropdown-menu.show) .admin-toolbar__inner {
+        overflow: visible;
+    }
+
+    .admin-toolbar .dropdown-menu {
+        z-index: calc(var(--z-toolbar) + 20);
+    }
+
+    .admin-toolbar__link { padding: 0 8px; }
+
+    .admin-toolbar__brand {
+        padding-right: 10px;
+        margin-right: 4px;
+    }
+
+    /* Icon-only mode: mark text with <span class="toolbar-label"> */
+    .admin-toolbar__link .toolbar-label { display: none; }
+}
+
+/* Prefer click/focus over sticky :hover on touch devices */
+@media (hover: none) {
+    .admin-toolbar__link:hover {
+        background: transparent;
+        color: var(--admin-toolbar-fg);
+    }
+
+    .admin-toolbar__link:focus-visible,
+    .admin-toolbar__link[aria-expanded="true"] {
+        background: var(--admin-toolbar-hover);
+        color: var(--admin-toolbar-fg-strong);
+    }
+
+    .admin-toolbar__link--danger:hover {
+        background: transparent;
+        color: var(--admin-toolbar-fg);
+    }
+
+    .admin-toolbar__link--danger:focus-visible,
+    .admin-toolbar__link--danger[aria-expanded="true"] {
+        background: var(--admin-toolbar-danger);
+        color: #fff;
+    }
+}
+
+/* =========================================================
+   Reduced motion
+   ========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+    .admin-toolbar__brand,
+    .admin-toolbar__link {
+        transition: none !important;
+    }
+}

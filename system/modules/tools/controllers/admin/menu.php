@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+use System\Engine\Controller;
+
 class ToolsAdminMenu extends Controller
 {
     public function indexAction(): void

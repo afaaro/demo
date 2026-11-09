@@ -77,18 +77,13 @@ class RateLimiter
 
     private function ip(): string
     {
-        $trustProxy = (bool) $this->registry->get('config')->get('http.trust_proxy', false);
-
-        if ($trustProxy) {
-            foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_FOR'] as $header) {
-                if (empty($_SERVER[$header])) {
-                    continue;
-                }
-                $candidate = trim(explode(',', (string) $_SERVER[$header])[0]);
-                if (filter_var($candidate, FILTER_VALIDATE_IP)) {
-                    return $candidate;
-                }
+        try {
+            $request = $this->registry->get('request');
+            if (is_object($request) && method_exists($request, 'ip')) {
+                return $request->ip();
             }
+        } catch (\Throwable) {
+            // Fall through to REMOTE_ADDR.
         }
 
         return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';

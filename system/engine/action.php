@@ -190,6 +190,9 @@ class Action
                 $params['arg' . $i] = $this->sanitizeParam($segment);
             }
 
+            $isAdmin = str_contains($controllerRoute, '/admin/')
+                || str_ends_with($controllerRoute, '/admin');
+
             return new Route(
                 module:  $module,
                 url:     $controllerRoute,
@@ -198,6 +201,7 @@ class Action
                 file:    $modulePath . $file,
                 action:  $action,
                 params:  $params,
+                auth:    $isAdmin,
                 methods: ['GET', 'POST'],
             );
         }
@@ -349,13 +353,7 @@ class Action
             return;
         }
 
-        // Signed / webhook callbacks that opt out via route map, plus legacy ebay prefixes.
-        foreach (['store/ebay/'] as $prefix) {
-            if (str_starts_with($uri, $prefix)) {
-                return;
-            }
-        }
-
+        // Webhooks must set csrf: false on their route map entry.
         $this->registry->get('request')->enforceCsrf();
     }
 

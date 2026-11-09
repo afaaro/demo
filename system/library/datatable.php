@@ -25,6 +25,8 @@ class DataTable {
     protected bool $filtered = false;
     protected string $emptyMessage = 'No records found.';
     protected string $noMatchMessage = 'No records match your search.';
+    /** @var array<string, string> */
+    protected array $preserve = [];
 
     public function __construct(protected readonly Registry $registry) {}
 
@@ -83,6 +85,18 @@ class DataTable {
 
     public function setFiltered(bool $filtered): void {
         $this->filtered = $filtered;
+    }
+
+    /** @param array<string, string> $params */
+    public function setPreserve(array $params): void {
+        $this->preserve = [];
+        foreach ($params as $name => $value) {
+            $name = trim((string) $name);
+            if ($name === '' || !is_scalar($value) || (string) $value === '') {
+                continue;
+            }
+            $this->preserve[$name] = (string) $value;
+        }
     }
 
     public function render(): string {
@@ -179,6 +193,13 @@ class DataTable {
             $html .= '<input type="hidden" name="sort" value="' . htmlspecialchars($this->sort, ENT_QUOTES, 'UTF-8') . '">';
             $html .= '<input type="hidden" name="dir" value="' . htmlspecialchars($this->sortDir, ENT_QUOTES, 'UTF-8') . '">';
         }
+        foreach ($this->preserve as $name => $value) {
+            if (isset($hidden[$name])) {
+                continue;
+            }
+            $html .= '<input type="hidden" name="' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8')
+                . '" value="' . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '">';
+        }
 
         return $html;
     }
@@ -239,9 +260,10 @@ class DataTable {
         $html = '<div class="table-responsive">';
         $html .= '<table' . $attrString . '>';
         $html .= '<thead><tr>';
-        foreach ($this->columns as $key => $label) {
-            $headerText = is_string($label) ? $label : ucwords(str_replace('_', ' ', (string) $key));
-            $html .= '<th>' . $this->renderHeader((string) $key, $headerText) . '</th>';
+        foreach ($this->columns as $key => $column) {
+            $key = (string) $key;
+            $html .= '<th data-col="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">'
+                . $this->renderHeader($key, $this->columnLabel($key, $column)) . '</th>';
         }
         $html .= '</tr>';
         $html .= $this->renderFilterRow();
@@ -264,12 +286,9 @@ class DataTable {
 
                 $html .= '<tr' . $attributes . '>';
                 foreach ($this->columns as $key => $column) {
-                    $html .= '<td>';
-                    if ($column instanceof \Closure || (is_array($column) && is_callable($column))) {
-                        $html .= $column($row);
-                    } elseif (isset($row[$key])) {
-                        $html .= htmlspecialchars((string) $row[$key], ENT_QUOTES, 'UTF-8');
-                    }
+                    $key = (string) $key;
+                    $html .= '<td data-col="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">';
+                    $html .= $this->renderCell($key, $column, $row);
                     $html .= '</td>';
                 }
                 $html .= '</tr>';
@@ -278,6 +297,31 @@ class DataTable {
 
         $html .= '</tbody></table></div>';
         return $html;
+    }
+
+    private function columnLabel(string $key, mixed $column): string
+    {
+        if (is_string($column)) {
+            return $column;
+        }
+        if (is_array($column) && isset($column['label']) && is_string($column['label'])) {
+            return $column['label'];
+        }
+        return ucwords(str_replace('_', ' ', $key));
+    }
+
+    private function renderCell(string $key, mixed $column, array $row): string
+    {
+        if (is_array($column) && isset($column['render']) && is_callable($column['render'])) {
+            return (string) ($column['render'])($row);
+        }
+        if ($column instanceof \Closure || (is_array($column) && is_callable($column))) {
+            return (string) $column($row);
+        }
+        if (isset($row[$key])) {
+            return htmlspecialchars((string) $row[$key], ENT_QUOTES, 'UTF-8');
+        }
+        return '';
     }
 
     private function emptyAlert(): string
@@ -295,11 +339,11 @@ class DataTable {
         }
 
         $html = '<tr class="dataset-column-filters">';
-        foreach ($this->columns as $key => $label) {
+        foreach ($this->columns as $key => $column) {
             $key = (string) $key;
-            $html .= '<th class="fw-normal py-2">';
+            $html .= '<th class="fw-normal py-2" data-col="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">';
             if (array_key_exists($key, $this->columnSearch)) {
-                $headerText = is_string($label) ? $label : ucwords(str_replace('_', ' ', $key));
+                $headerText = $this->columnLabel($key, $column);
                 $html .= '<input type="search" name="c[' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . ']" '
                     . 'class="form-control form-control-sm" '
                     . 'placeholder="' . htmlspecialchars($headerText, ENT_QUOTES, 'UTF-8') . '" '
@@ -396,6 +440,11 @@ class DataTable {
             $params = [];
         }
         unset($params['route'], $params['page']);
+        foreach ($this->preserve as $name => $value) {
+            if (!array_key_exists($name, $params) || $params[$name] === '' || $params[$name] === null) {
+                $params[$name] = $value;
+            }
+        }
         return $params;
     }
 
@@ -446,7 +495,13 @@ class DataTable {
     private function clearUrl(): string
     {
         $route = $this->currentRoute();
-        $url = function_exists('url') ? url($route) : '?route=' . urlencode($route);
+        $params = $this->preserve;
+        if (function_exists('url')) {
+            $url = $params === [] ? url($route) : url($route, $params);
+        } else {
+            $query = http_build_query($params);
+            $url = '?route=' . urlencode($route) . ($query !== '' ? '&' . $query : '');
+        }
         return htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
     }
 }

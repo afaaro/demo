@@ -50,6 +50,22 @@ class Cache
         $this->adaptor->delete($key);
     }
 
+    /**
+     * Atomically increment a counter (used by RateLimiter).
+     * Returns the value after increment.
+     */
+    public function increment(string $key, int $ttl = 60): int
+    {
+        if (method_exists($this->adaptor, 'increment')) {
+            return (int) $this->adaptor->increment($key, max(1, $ttl));
+        }
+
+        $current = (int) ($this->get($key) ?? 0);
+        $next = $current + 1;
+        $this->set($key, $next, max(1, $ttl));
+        return $next;
+    }
+
     public function flush(): bool
     {
         if (method_exists($this->adaptor, 'flush')) {

@@ -13,11 +13,8 @@ class UserAdminGroups extends Controller
     protected function boot(): void
     {
         if (!$this->auth->check()) {
-            $this->session->set(
-                'redirect_after_login',
-                $this->url->to('user/admin/groups')
-            );
-            redirect_to('user/login');
+            $this->session->set('redirect_after_login', 'user/admin/groups');
+            redirect_to('user/login', ['next' => 'user/admin/groups']);
         }
         // Permissions: Action.php only (user.admin.groups.*).
     }
@@ -303,6 +300,8 @@ class UserAdminGroups extends Controller
         }
 
         $isSuperGroup = (int) ($group['level'] ?? 0) === User::USER_LEVEL_SUPER_ADMIN;
+        $nameLocked = $this->isLockedSystemGroupName((string) ($group['name'] ?? ''));
+        $isGuestGroup = strcasecmp((string) ($group['name'] ?? ''), 'guest') === 0;
 
         if ($this->request->isPost()) {
             $name        = trim((string) $this->request->post('name',        'string', ''));
@@ -325,6 +324,10 @@ class UserAdminGroups extends Controller
                 $isSystem = 1;
                 $level    = User::USER_LEVEL_SUPER_ADMIN;
             }
+            if ($nameLocked) {
+                $name = (string) $group['name'];
+                $isSystem = 1;
+            }
 
             if (!preg_match('/^[a-z0-9_]{2,64}$/', $name)) {
                 $this->notify->error('Name must be 2–64 characters: lowercase letters, numbers, underscore.');
@@ -332,6 +335,9 @@ class UserAdminGroups extends Controller
                 $this->notify->error('A group with this name already exists.');
             } else {
                 $beforePerms = $currentPerms;
+                $beforeLevel = (int) ($group['level'] ?? 0);
+                $permsChanged = $beforePerms !== $permissions || $beforeLevel !== $level;
+
                 $this->db->update('user_groups', [
                     'name'        => $name,
                     'label'       => $label !== '' ? $label : $name,
@@ -341,14 +347,17 @@ class UserAdminGroups extends Controller
                     'permissions' => json_encode($permissions, JSON_UNESCAPED_SLASHES),
                 ], ['id' => $id]);
 
-                User::bumpAuthRevisionForGroup($id);
+                // Only invalidate sessions when privileges actually changed.
+                if ($permsChanged) {
+                    User::bumpAuthRevisionForGroup($id);
+                }
                 (new UserAuthAudit($this->db))->log(
                     'group.permissions_updated',
                     'Updated group ' . $name,
                     $this->auth->id(),
                     null,
                     $id,
-                    ['permissions' => $beforePerms, 'level' => (int) ($group['level'] ?? 0)],
+                    ['permissions' => $beforePerms, 'level' => $beforeLevel],
                     ['permissions' => $permissions, 'level' => $level],
                 );
 
@@ -379,13 +388,17 @@ class UserAdminGroups extends Controller
         $auditRows = (new UserAuthAudit($this->db))->forGroup($id, 15);
         $isSuperGroup = (int) ($group['level'] ?? 0) === User::USER_LEVEL_SUPER_ADMIN;
 
-        echo $this->view->inline(function () use ($group, $members, $currentPerms, $allActions, $id, $isSuperGroup, $auditRows) {
+        echo $this->view->inline(function () use ($group, $members, $currentPerms, $allActions, $id, $isSuperGroup, $auditRows, $nameLocked, $isGuestGroup) {
             $this->view->assign('title', 'Edit Group: ' . $group['name']);
             $this->view->block('right_sidebar', 'Edit Group');
 
             echo '<h1 class="h3 mb-4">Edit Group: '
                . $this->view->e($group['name'])
                . '</h1>';
+
+            if ($isGuestGroup) {
+                echo '<div class="alert alert-info">Guest is for anonymous visitors. Permissions apply when not logged in. Do not assign members.</div>';
+            }
 
             echo $this->form->open([
                 'action' => $this->url->to('user/admin/groups/edit', ['id' => $id]),
@@ -398,8 +411,14 @@ class UserAdminGroups extends Controller
                 'type'     => 'text',
                 'value'    => $group['name'],
                 'required' => true,
-                'help'     => 'Lowercase letters, numbers, underscore. Unique. 2–64 characters. Rank comes from Level, not this name.',
+                'disabled' => $nameLocked,
+                'help'     => $nameLocked
+                    ? 'System group name is locked.'
+                    : 'Lowercase letters, numbers, underscore. Unique. 2–64 characters.',
             ]);
+            if ($nameLocked) {
+                echo '<input type="hidden" name="name" value="' . $this->view->e((string) $group['name']) . '">';
+            }
 
             echo $this->form->field([
                 'name'  => 'label',
@@ -422,9 +441,9 @@ class UserAdminGroups extends Controller
                 'type'     => 'checkbox',
                 'value'    => 1,
                 'checked'  => !empty($group['is_system']),
-                'disabled' => $isSuperGroup,
+                'disabled' => $isSuperGroup || $nameLocked,
             ]);
-            if ($isSuperGroup) {
+            if ($isSuperGroup || $nameLocked) {
                 echo '<input type="hidden" name="is_system" value="1">';
             }
 
@@ -571,49 +590,53 @@ class UserAdminGroups extends Controller
             echo '<h2 class="h5 mt-5">Members <span class="text-muted small">('
                . count($members) . ')</span></h2>';
 
-            echo '<form method="post" action="'
-               . $this->view->e($this->url->to('user/admin/groups/add-member'))
-               . '" class="row g-2 align-items-end mb-3">';
-            echo $this->request->csrfField();
-            echo '<input type="hidden" name="group_id" value="' . $id . '">';
-            echo '<div class="col-md-6"><label class="form-label small">Add member</label>'
-               . '<input type="text" name="login" class="form-control" required'
-               . ' placeholder="Username or email" autocomplete="off"></div>';
-            echo '<div class="col-auto"><button type="submit" class="btn btn-primary">Add to group</button></div>';
-            echo '</form>';
-
-            if (empty($members)) {
-                echo '<p class="text-muted">No members in this group.</p>';
+            if ($isGuestGroup) {
+                echo '<p class="text-muted">Guest represents anonymous visitors. Membership is not allowed.</p>';
             } else {
-                echo '<ul class="list-group">';
-                foreach ($members as $m) {
-                    $mid = (int) $m['id'];
-                    $status = (string) ($m['status'] ?? '');
-                    echo '<li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">';
-                    echo '<span>';
-                    echo $this->view->e((string) $m['username']);
-                    echo ' <span class="text-muted small">&lt;'
-                       . $this->view->e((string) $m['email']) . '&gt;</span>';
-                    if ($status !== '' && $status !== 'active') {
-                        echo ' <span class="badge text-bg-secondary">' . $this->view->e($status) . '</span>';
+                echo '<form method="post" action="'
+                   . $this->view->e($this->url->to('user/admin/groups/add-member'))
+                   . '" class="row g-2 align-items-end mb-3">';
+                echo $this->request->csrfField();
+                echo '<input type="hidden" name="group_id" value="' . $id . '">';
+                echo '<div class="col-md-6"><label class="form-label small">Add member</label>'
+                   . '<input type="text" name="login" class="form-control" required'
+                   . ' placeholder="Username or email" autocomplete="off"></div>';
+                echo '<div class="col-auto"><button type="submit" class="btn btn-primary">Add to group</button></div>';
+                echo '</form>';
+
+                if (empty($members)) {
+                    echo '<p class="text-muted">No members in this group.</p>';
+                } else {
+                    echo '<ul class="list-group">';
+                    foreach ($members as $m) {
+                        $mid = (int) $m['id'];
+                        $status = (string) ($m['status'] ?? '');
+                        echo '<li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">';
+                        echo '<span>';
+                        echo $this->view->e((string) $m['username']);
+                        echo ' <span class="text-muted small">&lt;'
+                           . $this->view->e((string) $m['email']) . '&gt;</span>';
+                        if ($status !== '' && $status !== 'active') {
+                            echo ' <span class="badge text-bg-secondary">' . $this->view->e($status) . '</span>';
+                        }
+                        echo '</span>';
+                        echo '<span class="text-nowrap">';
+                        echo '<a href="' . $this->view->e($this->url->to('user/admin/users/edit', ['id' => $mid])) . '"'
+                           . ' class="btn btn-sm btn-outline-secondary">Edit user</a> ';
+                        echo '<form method="post" action="'
+                           . $this->view->e($this->url->to('user/admin/groups/remove-member'))
+                           . '" class="d-inline"'
+                           . ' onsubmit="return confirm(\'Remove this user from the group?\');">';
+                        echo $this->request->csrfField();
+                        echo '<input type="hidden" name="group_id" value="' . $id . '">';
+                        echo '<input type="hidden" name="user_id" value="' . $mid . '">';
+                        echo '<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>';
+                        echo '</form>';
+                        echo '</span>';
+                        echo '</li>';
                     }
-                    echo '</span>';
-                    echo '<span class="text-nowrap">';
-                    echo '<a href="' . $this->view->e($this->url->to('user/admin/users/edit', ['id' => $mid])) . '"'
-                       . ' class="btn btn-sm btn-outline-secondary">Edit user</a> ';
-                    echo '<form method="post" action="'
-                       . $this->view->e($this->url->to('user/admin/groups/remove-member'))
-                       . '" class="d-inline"'
-                       . ' onsubmit="return confirm(\'Remove this user from the group?\');">';
-                    echo $this->request->csrfField();
-                    echo '<input type="hidden" name="group_id" value="' . $id . '">';
-                    echo '<input type="hidden" name="user_id" value="' . $mid . '">';
-                    echo '<button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>';
-                    echo '</form>';
-                    echo '</span>';
-                    echo '</li>';
+                    echo '</ul>';
                 }
-                echo '</ul>';
             }
 
             if ($auditRows !== []) {
@@ -807,6 +830,12 @@ class UserAdminGroups extends Controller
             return;
         }
 
+        if (strcasecmp((string) ($group['name'] ?? ''), 'guest') === 0) {
+            $this->notify->error('Guests are anonymous visitors. Membership is not allowed.');
+            redirect_to('user/admin/groups/edit', ['id' => $groupId]);
+            return;
+        }
+
         if ($login === '') {
             $this->notify->error('Enter a username or email.');
             redirect_to('user/admin/groups/edit', ['id' => $groupId]);
@@ -867,6 +896,12 @@ class UserAdminGroups extends Controller
         if ($group === [] || $userId <= 0) {
             $this->notify->error('Invalid request.');
             redirect_to('user/admin/groups');
+            return;
+        }
+
+        if (strcasecmp((string) ($group['name'] ?? ''), 'guest') === 0) {
+            $this->notify->error('Guests are anonymous visitors. Membership is not allowed.');
+            redirect_to('user/admin/groups/edit', ['id' => $groupId]);
             return;
         }
 
@@ -1000,6 +1035,11 @@ class UserAdminGroups extends Controller
             [$name, $exceptId]
         )->row;
         return $row !== [];
+    }
+
+    private function isLockedSystemGroupName(string $name): bool
+    {
+        return in_array(strtolower(trim($name)), ['guest', 'authenticated', 'admin', 'sadmin'], true);
     }
 
     /**

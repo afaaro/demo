@@ -78,6 +78,16 @@ class Redis
         $this->redis->del($this->prefix . $key);
     }
 
+    public function increment(string $key, int $ttl = 60): int
+    {
+        $full = $this->prefix . $key;
+        $value = (int) $this->redis->incr($full);
+        if ($value === 1) {
+            $this->redis->expire($full, max(1, $ttl));
+        }
+        return $value;
+    }
+
     public function flush(): bool
     {
         $pattern  = $this->prefix . '*';

@@ -60,6 +60,11 @@ function get_module_path(string $module): ?string
 
 function get_enabled_module(string $name): bool
 {
+    $name = strtolower(trim($name));
+    if ($name === '' || !preg_match('/^[a-z0-9_-]+$/', $name)) {
+        return false;
+    }
+
     static $cache = null;
     if ($cache === null) {
         // Load all enabled modules once
@@ -75,8 +80,26 @@ function get_enabled_module(string $name): bool
     return is_dir($systemPath);
 }
 
+function helper_debug_enabled(): bool
+{
+    if (defined('DEBUG') && DEBUG) {
+        return true;
+    }
+    try {
+        $config = registry('config');
+        return (bool) $config->get('error.debug', false)
+            || (bool) $config->get('app.debug', false);
+    } catch (\Throwable) {
+        return false;
+    }
+}
+
 function debug(mixed ...$args): void
 {
+    if (!helper_debug_enabled()) {
+        return;
+    }
+
     $trace  = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
     $called = $trace[1] ?? $trace[0] ?? [];
 
@@ -120,6 +143,9 @@ function debug(mixed ...$args): void
 
 function dd(mixed ...$args): never
 {
+    if (!helper_debug_enabled()) {
+        exit(1);
+    }
     debug(...$args);
     exit(1);
 }
@@ -164,6 +190,10 @@ function console(): \System\Engine\Console
 }
 
 if (!function_exists('load_class')) {
+    /**
+     * Legacy module/system class loader. Prefer System\Engine\Loader in new code.
+     * Call sites must not pass user-controlled $name / $module / $className.
+     */
     function load_class(
         string $name,
         string $type = 'library',
@@ -180,27 +210,34 @@ if (!function_exists('load_class')) {
             );
         };
 
-        $type = strtolower($type);
+        $type = strtolower(trim($type));
 
         /*
-         * Validate and convert a relative class path.
+         * Validate and convert a relative class path (no ".", "..", empty segments).
          */
         $validatePath = static function (
             string $name,
             string $type
         ): array {
-            $name = str_replace('\\', '/', $name);
+            $name = trim(str_replace('\\', '/', $name), '/');
 
-            if (!preg_match('/^[a-zA-Z0-9_\/-]+$/', $name)) {
+            if ($name === '' || !preg_match('/^[a-zA-Z0-9_\/-]+$/', $name)) {
                 throw new InvalidArgumentException(
                     'Invalid module ' . $type . ' path.'
                 );
             }
 
             $parts = explode('/', $name);
+            if ($parts === []) {
+                throw new InvalidArgumentException(
+                    'Invalid module ' . $type . ' path.'
+                );
+            }
 
             foreach ($parts as $part) {
-                if (!preg_match('/^[a-zA-Z0-9_-]+$/', $part)) {
+                if ($part === '' || $part === '.' || $part === '..'
+                    || !preg_match('/^[a-zA-Z0-9_-]+$/', $part)
+                ) {
                     throw new InvalidArgumentException(
                         'Invalid module ' . $type . ' path.'
                     );
@@ -208,6 +245,65 @@ if (!function_exists('load_class')) {
             }
 
             return $parts;
+        };
+
+        /**
+         * Ensure $file resolves under $baseDir (blocks symlink escape).
+         */
+        $assertInside = static function (string $file, string $baseDir): string {
+            $realBase = realpath($baseDir);
+            if ($realBase === false || !is_dir($realBase)) {
+                throw new RuntimeException('Invalid base directory.');
+            }
+            if (!is_file($file)) {
+                throw new RuntimeException('File not found: ' . $file);
+            }
+            $realFile = realpath($file);
+            if ($realFile === false || !is_readable($realFile)) {
+                throw new RuntimeException('File not readable: ' . $file);
+            }
+            $prefix = $realBase . DIRECTORY_SEPARATOR;
+            if (!str_starts_with($realFile, $prefix)) {
+                throw new RuntimeException('Path escapes module directory.');
+            }
+            return $realFile;
+        };
+
+        /**
+         * After require, only instantiate a class defined by that file.
+         */
+        $instantiateFromFile = static function (string $file, string $class, string $type): object {
+            require_once $file;
+
+            if (!class_exists($class, false)) {
+                throw new RuntimeException(
+                    ucfirst($type) . ' class not found: ' . $class
+                );
+            }
+
+            $ref = new ReflectionClass($class);
+            if ($ref->isInternal()) {
+                throw new RuntimeException(
+                    'Refusing to instantiate internal class via load_class.'
+                );
+            }
+            $declared = $ref->getFileName();
+            if ($declared === false
+                || realpath($declared) !== realpath($file)
+            ) {
+                throw new RuntimeException(
+                    'Class "' . $class . '" is not defined by the loaded file.'
+                );
+            }
+            if ($ref->getConstructor() !== null
+                && $ref->getConstructor()->getNumberOfRequiredParameters() > 0
+            ) {
+                throw new RuntimeException(
+                    'Class "' . $class . '" requires constructor arguments; use Loader instead.'
+                );
+            }
+
+            return $ref->newInstance();
         };
 
         /*
@@ -224,19 +320,37 @@ if (!function_exists('load_class')) {
                 ? 'System\\Library\\' . $studly($name)
                 : 'System\\Engine\\' . $studly($name);
 
-            $key = $type . '.' . $name;
+            $key = $type . '.' . strtolower($name);
 
             if (!$registry->has($key)) {
                 $registry->singleton(
                     $key,
-                    static function () use ($class) {
+                    static function () use ($class, $type) {
                         if (!class_exists($class)) {
                             throw new RuntimeException(
                                 'Class not found: ' . $class
                             );
                         }
-
-                        return new $class();
+                        $ref = new ReflectionClass($class);
+                        if ($ref->isInternal()) {
+                            throw new RuntimeException(
+                                'Refusing to instantiate internal class via load_class.'
+                            );
+                        }
+                        $expectedNs = $type === 'library' ? 'System\\Library\\' : 'System\\Engine\\';
+                        if (!str_starts_with($ref->getName(), $expectedNs)) {
+                            throw new RuntimeException(
+                                'Class namespace mismatch for load_class.'
+                            );
+                        }
+                        if ($ref->getConstructor() !== null
+                            && $ref->getConstructor()->getNumberOfRequiredParameters() > 0
+                        ) {
+                            throw new RuntimeException(
+                                'Class "' . $class . '" requires constructor arguments; use registry/Loader.'
+                            );
+                        }
+                        return $ref->newInstance();
                     }
                 );
             }
@@ -265,24 +379,18 @@ if (!function_exists('load_class')) {
 
             $parts = $validatePath($name, $type);
 
-            /*
-             * Resolve module directory.
-             */
             $directory = match ($type) {
                 'library'    => 'libraries',
                 'model'      => 'models',
                 'controller' => 'controllers',
             };
 
-            $file = $modulePath
-                . $directory
+            $baseDir = rtrim($modulePath, '/\\') . DIRECTORY_SEPARATOR . $directory;
+            $file = $baseDir
                 . DIRECTORY_SEPARATOR
                 . implode(DIRECTORY_SEPARATOR, $parts)
                 . '.php';
 
-            /*
-             * Resolve class name.
-             */
             $classParts = array_merge([$module], $parts);
 
             $class = $className ?? implode(
@@ -290,72 +398,31 @@ if (!function_exists('load_class')) {
                 array_map($studly, $classParts)
             );
 
+            // Local class name only — no namespaces / no leading backslash.
             if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $class)) {
                 throw new InvalidArgumentException(
                     'Invalid ' . $type . ' class name.'
                 );
             }
 
-            /*
-             * Registry key.
-             */
             $key = $type . '.'
-                . $module
+                . strtolower($module)
                 . '.'
                 . implode('/', $parts)
                 . '.'
                 . $class;
 
-            /*
-             * Module libraries are singletons.
-             * Models and controllers are fresh instances.
-             */
+            $resolver = static function () use ($file, $baseDir, $class, $type, $assertInside, $instantiateFromFile): object {
+                $realFile = $assertInside($file, $baseDir);
+                return $instantiateFromFile($realFile, $class, $type);
+            };
+
             if ($type === 'library') {
                 if (!$registry->has($key)) {
-                    $registry->singleton(
-                        $key,
-                        static function () use ($file, $class, $type) {
-                            if (!is_file($file) || !is_readable($file)) {
-                                throw new RuntimeException(
-                                    ucfirst($type) . ' file not found: ' . $file
-                                );
-                            }
-
-                            require_once $file;
-
-                            if (!class_exists($class, false)) {
-                                throw new RuntimeException(
-                                    ucfirst($type) . ' class not found: ' . $class
-                                );
-                            }
-
-                            return new $class();
-                        }
-                    );
+                    $registry->singleton($key, $resolver);
                 }
-            } else {
-                if (!$registry->has($key)) {
-                    $registry->factory(
-                        $key,
-                        static function () use ($file, $class, $type) {
-                            if (!is_file($file) || !is_readable($file)) {
-                                throw new RuntimeException(
-                                    ucfirst($type) . ' file not found: ' . $file
-                                );
-                            }
-
-                            require_once $file;
-
-                            if (!class_exists($class, false)) {
-                                throw new RuntimeException(
-                                    ucfirst($type) . ' class not found: ' . $class
-                                );
-                            }
-
-                            return new $class();
-                        }
-                    );
-                }
+            } elseif (!$registry->has($key)) {
+                $registry->factory($key, $resolver);
             }
 
             return $registry->get($key);
@@ -397,7 +464,12 @@ function route_url(string $route, array $params = [], bool $absolute = false, bo
 }
 
 function redirect_to(string $route = '', array $params = []): never {
-    header('Location: ' . route_url($route, $params));
+    $target = route_url($route, $params);
+    // route_url() builds internal paths only; still strip CR/LF from Location.
+    $target = str_replace(["\r", "\n"], '', $target);
+    if (!headers_sent()) {
+        header('Location: ' . $target);
+    }
     exit;
 }
 
@@ -447,7 +519,12 @@ function get_base_url(): string
         || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443)
         ? 'https://' : 'http://';
 
-    $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
+    $rawHost = (string) ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost');
+    $host = preg_replace('/[^a-zA-Z0-9.\-:\[\]]/', '', $rawHost) ?? '';
+    if ($host === '' || !preg_match('/^(\[[a-fA-F0-9:]+\]|[a-zA-Z0-9.-]+)(:\d{1,5})?$/', $host)) {
+        $host = 'localhost';
+    }
+
     $scriptName = $_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? '';
     $basePath = $scriptName !== '' ? rtrim(dirname($scriptName), '/\\') : '';
 
@@ -607,8 +684,10 @@ function opentable($title = '', $class = '') {
 
 function closetable($footer = '') {
     $html = '</div>'; // close card-body
-    if (!empty($footer)) {
-        $html .= '<div class="card-footer text-muted">' . $footer . '</div>';
+    if ($footer !== null && $footer !== '') {
+        $html .= '<div class="card-footer text-muted">'
+            . htmlspecialchars((string) $footer, ENT_QUOTES, 'UTF-8')
+            . '</div>';
     }
     $html .= '</div>'; // close card
     return $html;
@@ -616,21 +695,22 @@ function closetable($footer = '') {
 
 function openslide($title = '', $state = "on", $id = null)
 {
-    $id = $id ?: 'slide_' . uniqid();
+    $id = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($id ?: ('slide_' . uniqid()))) ?: ('slide_' . uniqid());
     $showClass = ($state === 'on') ? 'show' : '';
     $expanded = ($state === 'on') ? 'true' : 'false';
+    $safeId = htmlspecialchars($id, ENT_QUOTES, 'UTF-8');
 
     $html = '<div class="card mb-3">';
     if (!empty($title)) {
-        $html .= '<div class="card-header" id="heading_' . $id . '">';
+        $html .= '<div class="card-header" id="heading_' . $safeId . '">';
         $html .= '<h5 class="mb-0">';
-        $html .= '<button class="btn btn-link text-decoration-none p-0" type="button" data-bs-toggle="collapse" data-bs-target="#collapse_' . $id . '" aria-expanded="' . $expanded . '">';
-        $html .= htmlspecialchars($title);
+        $html .= '<button class="btn btn-link text-decoration-none p-0" type="button" data-bs-toggle="collapse" data-bs-target="#collapse_' . $safeId . '" aria-expanded="' . $expanded . '">';
+        $html .= htmlspecialchars((string) $title, ENT_QUOTES, 'UTF-8');
         $html .= '</button>';
         $html .= '</h5>';
         $html .= '</div>';
     }
-    $html .= '<div id="collapse_' . $id . '" class="collapse ' . $showClass . '">';
+    $html .= '<div id="collapse_' . $safeId . '" class="collapse ' . $showClass . '">';
     $html .= '<div class="card-body">';
     return $html;
 }
@@ -638,8 +718,10 @@ function openslide($title = '', $state = "on", $id = null)
 function closeslide($footer = '')
 {
     $html = '</div>'; // close card-body
-    if (!empty($footer)) {
-        $html .= '<div class="card-footer text-muted">' . $footer . '</div>';
+    if ($footer !== null && $footer !== '') {
+        $html .= '<div class="card-footer text-muted">'
+            . htmlspecialchars((string) $footer, ENT_QUOTES, 'UTF-8')
+            . '</div>';
     }
     $html .= '</div>'; // close collapse div
     $html .= '</div>'; // close card

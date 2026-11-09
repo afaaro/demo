@@ -198,7 +198,7 @@ class View
             throw new RuntimeException("Invalid asset path: '{$path}'.");
         }
 
-        // Path and URL both use 'assets/' (plural) — they used to disagree.
+        // Theme public files live under themes/{theme}/asset/ (singular).
         $fullPath = $this->themePath('asset/' . $path);
         $version  = is_file($fullPath) ? (string) filemtime($fullPath) : '0';
         $base     = rtrim($this->request->baseUrl(), '/');
@@ -843,7 +843,7 @@ class View
         $this->appendUnique($this->styles, trim($href));
     }
 
-    /** Queue a theme stylesheet, e.g. css/modules/news.css */
+    /** Queue a theme stylesheet, e.g. css/extra.css */
     public function addThemeStyle(string $path): void
     {
         $this->addStyle($this->asset($path));

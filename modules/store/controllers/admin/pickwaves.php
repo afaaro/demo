@@ -13,7 +13,7 @@ use Module\Store\Services\PickwaveService;
 use Module\Store\Services\ShipmentRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
-use System\Library\Paginator;
+use System\Library\Dataset;
 
 class StoreAdminPickwaves extends Controller
 {
@@ -53,6 +53,11 @@ class StoreAdminPickwaves extends Controller
         $this->orders     = new OrderRepository($this->db);
         $this->brandsRepo = new BrandRepository($this->db);
         // Permissions: Action.php only.
+
+        $helper = get_module_path('store') . '/helpers/functions.php';
+        if (is_string($helper) && is_file($helper)) {
+            require_once $helper;
+        }
     }
 
     // =========================================================================
@@ -66,67 +71,229 @@ class StoreAdminPickwaves extends Controller
             $tab = 'overview';
         }
 
-        $waveTab   = (string) $this->request->get('wave_tab', 'string', 'open');
+        $waveTab = (string) $this->request->get('wave_tab', 'string', 'open');
         if (!in_array($waveTab, ['open', 'completed'], true)) {
             $waveTab = 'open';
         }
-
-        $channelId = (int) $this->request->get('channel_id', 'int', 0);
-        $search    = trim((string) $this->request->get('q', 'string', ''));
-        $skuFilter = trim((string) $this->request->get('sku', 'string', ''));
-        $rawBrands = $this->request->get('brands', 'raw', []);
-        if (!is_array($rawBrands)) {
-            $rawBrands = $rawBrands !== '' && $rawBrands !== null ? [(string) $rawBrands] : [];
-        }
-        $brands = array_values(array_unique(array_filter(
-            array_map(static fn($b) => trim((string) $b), $rawBrands),
-            static fn(string $b) => $b !== ''
-        )));
-        $page      = max(1, (int) $this->request->get('page', 'int', 1));
-        $sortIn    = trim((string) $this->request->get('sort', 'string', 'order_date'));
-        $dirIn     = trim((string) $this->request->get('dir', 'string', 'asc'));
-        [, $sort, $dir] = $this->pickwaves->outstandingOrderBy($sortIn, $dirIn);
-        $perPage   = 50;
-        $offset    = ($page - 1) * $perPage;
-
-        $filters = [
-            'channel_id' => $channelId,
-            'q'          => $search,
-            'sku'        => $skuFilter,
-            'brands'     => $brands,
-        ];
 
         $channels = array_values(array_filter(
             $this->channels->all(),
             static fn($c) => $c->enabled
         ));
 
-        $stats       = $this->pickwaves->stats();
-        $openWaves   = $this->pickwaves->listByStatus('open', 50);
-        $doneWaves   = $this->pickwaves->listByStatus('completed', 50);
-        $total       = $this->pickwaves->countOutstanding($filters);
-        $outstanding = $this->pickwaves->outstandingOrders(
-            $perPage,
-            $offset,
-            $filters,
-            $sort,
-            $dir,
-        );
-        $brandOptions = $this->mergeBrandOptions(
-            $this->pickwaves->outstandingBrandOptions($filters)
-        );
-        $itemsBy     = $this->orders->itemsByOrderIds(array_column($outstanding, 'id'));
-        $lastPage    = max(1, (int) ceil($total / $perPage));
+        $stats     = $this->pickwaves->stats();
+        $openWaves = $this->pickwaves->listByStatus('open', 50);
+        $doneWaves = $this->pickwaves->listByStatus('completed', 50);
+
+        $datasetHtml = '';
+        $outstandingTotal = (int) ($stats['outstanding'] ?? 0);
+
+        if ($tab === 'overview') {
+            $channelOptions = ['0' => 'All channels'];
+            foreach ($channels as $c) {
+                $channelOptions[(string) (int) $c->id] = $c->label !== '' ? $c->label : $c->name;
+            }
+
+            $rawC = $this->request->query('c', 'raw', []);
+            $skuFromCol = is_array($rawC) ? trim((string) ($rawC['product_skus'] ?? '')) : '';
+            $brandOptions = $this->mergeBrandOptions(
+                $this->pickwaves->outstandingBrandOptions([
+                    'channel_id' => (int) $this->request->get('channel_id', 'int', 0),
+                    'q'          => trim((string) $this->request->get('q', 'string', '')),
+                    'sku'        => $skuFromCol !== ''
+                        ? $skuFromCol
+                        : trim((string) $this->request->get('sku', 'string', '')),
+                ])
+            );
+            $brandSelect = ['' => 'All brands'];
+            foreach ($brandOptions as $opt) {
+                $b = (string) ($opt['brand'] ?? '');
+                if ($b !== '') {
+                    $brandSelect[$b] = $b . ' (' . (int) ($opt['order_count'] ?? 0) . ')';
+                }
+            }
+
+            $productUrl = fn(int $id): string => $this->url->to('store/admin/products/edit', ['id' => $id]);
+
+            $dataset = (new Dataset($this->registry))
+                ->perPage(50)
+                ->searchPlaceholder('Search order, SKU, title, buyer…')
+                ->preserve(['tab' => 'overview', 'wave_tab' => $waveTab])
+                ->sortable([
+                    'channel', 'order_number', 'channel_ref', 'order_date', 'ship_by',
+                    'product_skus', 'brand', 'total_units', 'multiple_lines',
+                    'buyer', 'postcode', 'total', 'shipping_method', 'status',
+                ])
+                ->defaultSort('order_date', 'asc')
+                ->filter('channel_id', 'select', $channelOptions)
+                ->filter('brand', 'select', $brandSelect)
+                ->searchable(['product_skus'])
+                ->columns([
+                    'sel'             => '',
+                    'channel'         => 'Channel',
+                    'order_number'    => 'Order number',
+                    'channel_ref'     => 'Channel order ref',
+                    'order_date'      => 'Order date',
+                    'ship_by'         => 'Ship by date',
+                    'product_skus'    => 'Product SKUs',
+                    'brand'           => 'Brand',
+                    'channel_name'    => 'Channel product name',
+                    'total_units'     => 'Total units',
+                    'multiple_lines'  => 'Multiple lines',
+                    'packages'        => 'Packages',
+                    'weight'          => 'Order weight',
+                    'buyer'           => 'Buyer',
+                    'postcode'        => 'Postcode',
+                    'total'           => 'Total',
+                    'shipping_method' => 'Shipping method',
+                    'status'          => 'Status',
+                ])
+                ->query(function ($db, array $state): array {
+                    $filters = $this->datasetFiltersToPickwaveFilters($state);
+                    [, $sort, $dir] = $this->pickwaves->outstandingOrderBy(
+                        (string) ($state['sort'] ?? 'order_date'),
+                        (string) ($state['dir'] ?? 'asc')
+                    );
+                    $rows = $this->pickwaves->outstandingOrders(
+                        $state['per_page'],
+                        $state['offset'],
+                        $filters,
+                        $sort,
+                        $dir
+                    );
+                    $total = $this->pickwaves->countOutstanding($filters);
+                    $itemsBy = $this->orders->itemsByOrderIds(array_column($rows, 'id'));
+                    $out = [];
+                    foreach ($rows as $row) {
+                        $oid = (int) $row['id'];
+                        $out[] = [
+                            '_row'   => $row,
+                            '_items' => $itemsBy[$oid] ?? [],
+                        ];
+                    }
+                    return ['rows' => $out, 'total' => $total];
+                });
+
+            $dataset->columns([
+                'sel' => static function (array $row): string {
+                    $oid = (int) ($row['_row']['id'] ?? 0);
+                    return '<input type="checkbox" class="form-check-input pw-order" name="order_ids[]" value="'
+                        . $oid . '" form="pw-create-form">';
+                },
+                'channel' => function (array $row): string {
+                    $r = $row['_row'];
+                    return $this->view->e((string) ($r['channel_label'] ?? $r['channel_name'] ?? ''));
+                },
+                'order_number' => function (array $row): string {
+                    $r = $row['_row'];
+                    $oid = (int) $r['id'];
+                    $extId = (string) ($r['external_order_id'] ?? '');
+                    return '<a href="' . $this->view->e($this->url->to('store/admin/orders/view', ['id' => $oid])) . '">'
+                        . $this->view->e($extId) . '</a>';
+                },
+                'channel_ref' => function (array $row): string {
+                    $extId = (string) ($row['_row']['external_order_id'] ?? '');
+                    return '<code class="small">' . $this->view->e($extId) . '</code>';
+                },
+                'order_date' => function (array $row): string {
+                    return $this->view->e($this->formatWhen((string) ($row['_row']['created_at'] ?? '')));
+                },
+                'ship_by' => function (array $row): string {
+                    $shipBy = $this->extractShipBy($row['_row']['shipping_address'] ?? null);
+                    return $shipBy !== ''
+                        ? '<span class="small text-nowrap">' . $this->view->e($shipBy) . '</span>'
+                        : '<span class="text-muted">—</span>';
+                },
+                'product_skus' => function (array $row) use ($productUrl): string {
+                    return store_render_short_skus($row['_items'] ?? [], $productUrl);
+                },
+                'brand' => function (array $row): string {
+                    $brandSet = [];
+                    foreach ($row['_items'] ?? [] as $it) {
+                        $b = trim((string) ($it['brand'] ?? ''));
+                        if ($b !== '') {
+                            $brandSet[$b] = true;
+                        }
+                    }
+                    $brandList = array_keys($brandSet);
+                    sort($brandList, SORT_STRING | SORT_FLAG_CASE);
+                    return $brandList !== []
+                        ? '<span class="small">' . $this->view->e(implode(', ', $brandList)) . '</span>'
+                        : '<span class="text-muted">—</span>';
+                },
+                'channel_name' => function (array $row) use ($productUrl): string {
+                    return '<span class="small">' . store_render_item_titles($row['_items'] ?? [], $productUrl) . '</span>';
+                },
+                'total_units' => static function (array $row): string {
+                    $units = 0;
+                    foreach ($row['_items'] ?? [] as $it) {
+                        $units += max(1, (int) ($it['qty'] ?? 1));
+                    }
+                    return (string) $units;
+                },
+                'multiple_lines' => static function (array $row): string {
+                    $lineCount = count($row['_items'] ?? []);
+                    return $lineCount > 1
+                        ? '<span class="badge text-bg-info">' . $lineCount . '</span>'
+                        : '<span class="text-muted">1</span>';
+                },
+                'packages' => static function (array $row): string {
+                    return (string) max(1, (int) ($row['_row']['package_count'] ?? 1));
+                },
+                'weight' => static function (array $row): string {
+                    return number_format((float) ($row['_row']['order_weight_kg'] ?? 0), 3);
+                },
+                'buyer' => function (array $row): string {
+                    $r = $row['_row'];
+                    return '<span class="sf-pick-clip">' . $this->view->e((string) ($r['buyer_username'] ?? '')) . '</span>'
+                        . '<span class="sf-pick-sub">' . $this->view->e((string) ($r['shipping_name'] ?? '')) . '</span>';
+                },
+                'postcode' => function (array $row): string {
+                    $postcode = $this->extractPostcode($row['_row']['shipping_address'] ?? null);
+                    return $this->view->e($postcode !== '' ? $postcode : '—');
+                },
+                'total' => function (array $row): string {
+                    $r = $row['_row'];
+                    return number_format((float) ($r['total'] ?? 0), 2) . ' '
+                        . $this->view->e((string) ($r['currency'] ?? ''));
+                },
+                'shipping_method' => function (array $row): string {
+                    $method = trim((string) ($row['_row']['shipping_method'] ?? ''));
+                    return $method !== ''
+                        ? '<span class="small">' . $this->view->e($method) . '</span>'
+                        : '<span class="text-muted">—</span>';
+                },
+                'status' => function (array $row): string {
+                    return '<span class="sf-pick-pill">' . $this->view->e((string) ($row['_row']['status'] ?? '')) . '</span>';
+                },
+            ]);
+
+            // Count with current filters for the card header.
+            $outstandingTotal = $this->pickwaves->countOutstanding(
+                $this->datasetFiltersToPickwaveFilters([
+                    'q'       => trim((string) $this->request->get('q', 'string', '')),
+                    'filters' => [
+                        'channel_id' => (string) $this->request->get('channel_id', 'string', '0'),
+                        'brand'      => trim((string) $this->request->get('brand', 'string', '')),
+                    ],
+                    'columns' => is_array($this->request->query('c', 'raw', []))
+                        ? $this->request->query('c', 'raw', [])
+                        : [],
+                ])
+            );
+
+            $datasetHtml = $dataset->render();
+        }
 
         echo $this->view->inline(function () use (
-            $tab, $waveTab, $channels, $channelId, $search, $skuFilter, $brands, $brandOptions,
-            $page, $lastPage, $total, $outstanding, $itemsBy, $openWaves, $doneWaves, $stats, $sort, $dir
+            $tab, $waveTab, $openWaves, $doneWaves, $stats, $datasetHtml, $outstandingTotal
         ) {
             $this->view->assign('title', 'Picking');
             $this->view->block('right_sidebar', 'Picking');
             $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo $this->pickStyles();
+            echo '<style>.sf-sku-link{color:#111827;text-decoration:none}.sf-sku-link:hover{color:#2563eb;text-decoration:underline}</style>';
             echo '<div class="sf-pick">';
             echo '<div class="sf-pick-head"><h1>Picking</h1></div>';
             echo '<nav class="sf-pick-tabs">';
@@ -161,24 +328,32 @@ class StoreAdminPickwaves extends Controller
 
             echo '<section class="sf-pick-card">';
             echo '<div class="sf-pick-card-h"><h2>Outstanding orders</h2>'
-               . '<span>' . number_format($total) . ' ready to pick</span></div>';
-            $this->renderOutstandingTab(
-                $channels,
-                $channelId,
-                $search,
-                $skuFilter,
-                $brands,
-                $brandOptions,
-                $outstanding,
-                $itemsBy,
-                $page,
-                $lastPage,
-                $total,
-                $sort,
-                $dir,
-            );
+               . '<span>' . number_format($outstandingTotal) . ' ready to pick</span></div>';
+            $this->renderOutstandingTab($datasetHtml);
             echo '</section></div>';
         });
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     * @return array{channel_id: int, q: string, sku: string, brands: array<int, string>}
+     */
+    private function datasetFiltersToPickwaveFilters(array $state): array
+    {
+        $f = is_array($state['filters'] ?? null) ? $state['filters'] : [];
+        $cols = is_array($state['columns'] ?? null) ? $state['columns'] : [];
+        $brand = trim((string) ($f['brand'] ?? ''));
+        $sku = trim((string) ($cols['product_skus'] ?? ''));
+        if ($sku === '') {
+            $sku = trim((string) $this->request->get('sku', 'string', ''));
+        }
+
+        return [
+            'channel_id' => (int) ($f['channel_id'] ?? 0),
+            'q'          => trim((string) ($state['q'] ?? '')),
+            'sku'        => $sku,
+            'brands'     => $brand !== '' ? [$brand] : [],
+        ];
     }
 
     // =========================================================================
@@ -1059,99 +1234,31 @@ class StoreAdminPickwaves extends Controller
     // =========================================================================
 
     /**
-     * @param array<int, object> $channels
-     * @param array<int, string> $brands
-     * @param array<int, array{brand: string, order_count: int}> $brandOptions
-     * @param array<int, array<string, mixed>> $outstanding
-     * @param array<int, array<int, array{external_sku: string, title: string, qty: int, brand?: string}>> $itemsBy
+     * Create-pickwave chrome + Dataset outstanding table.
      */
-    private function renderOutstandingTab(
-        array $channels,
-        int $channelId,
-        string $search,
-        string $skuFilter,
-        array $brands,
-        array $brandOptions,
-        array $outstanding,
-        array $itemsBy,
-        int $page,
-        int $lastPage,
-        int $total,
-        string $sort = 'order_date',
-        string $dir = 'asc',
-    ): void {
-        $queryBase = ['tab' => 'overview'];
-        if ($search !== '') {
-            $queryBase['q'] = $search;
-        }
-        if ($channelId > 0) {
-            $queryBase['channel_id'] = $channelId;
-        }
-        if ($skuFilter !== '') {
-            $queryBase['sku'] = $skuFilter;
-        }
-        if ($brands !== []) {
-            $queryBase['brands'] = $brands;
-        }
-        $queryBase['sort'] = $sort;
-        $queryBase['dir']  = $dir;
-
-        $resetUrl = $this->url->to('store/admin/pickwaves', ['tab' => 'overview']);
-
-        echo '<form method="get" action="' . $this->view->e($this->url->to('store/admin/pickwaves')) . '" class="sf-pick-filters" id="pw-filter-form">';
-        echo '<input type="hidden" name="tab" value="overview">';
-        echo '<input type="hidden" name="sort" value="' . $this->view->e($sort) . '">';
-        echo '<input type="hidden" name="dir" value="' . $this->view->e($dir) . '">';
-        echo '<input type="text" name="q" value="' . $this->view->e($search) . '" placeholder="Search order, SKU, title, buyer…">';
-        echo '<select name="channel_id">';
-        echo '<option value="0">All channels</option>';
-        foreach ($channels as $c) {
-            $sel = $channelId === (int) $c->id ? ' selected' : '';
-            echo '<option value="' . (int) $c->id . '"' . $sel . '>' . $this->view->e($c->label) . '</option>';
-        }
-        echo '</select>';
-        echo '<input type="text" name="sku" value="' . $this->view->e($skuFilter) . '" placeholder="SKU / product name">';
-        echo '<button class="sf-pick-btn" type="submit">Filter</button>';
-        echo '<a class="sf-pick-btn" href="' . $this->view->e($resetUrl) . '">Reset</a>';
-        // Persist brand selections when using top filter bar
-        foreach ($brands as $b) {
-            echo '<input type="hidden" name="brands[]" value="' . $this->view->e($b) . '">';
-        }
-        echo '</form>';
-
-        if ($outstanding === [] && $skuFilter === '' && $brands === [] && $search === '' && $channelId === 0) {
-            echo '<p class="sf-pick-empty">No outstanding orders ready to pick.</p>';
-            return;
-        }
-        if ($outstanding === []) {
-            echo '<p class="sf-pick-empty">No outstanding orders match these filters. '
-               . '<a href="' . $this->view->e($resetUrl) . '">Reset filters</a></p>';
-            return;
-        }
-
-        // Column definitions (keys used for data-col + localStorage). sortable = server ORDER BY.
-        $columns = [
-            'channel'         => ['label' => 'Channel',              'default' => true,  'sortable' => true],
-            'order_number'    => ['label' => 'Order number',         'default' => true,  'sortable' => true],
-            'channel_ref'     => ['label' => 'Channel order ref',    'default' => true,  'sortable' => true],
-            'order_date'      => ['label' => 'Order date',           'default' => true,  'sortable' => true],
-            'ship_by'         => ['label' => 'Ship by date',         'default' => false, 'sortable' => true],
-            'product_skus'    => ['label' => 'Product SKUs',         'default' => true,  'sortable' => true],
-            'brand'           => ['label' => 'Brand',                'default' => true,  'sortable' => true],
-            'channel_name'    => ['label' => 'Channel product name', 'default' => false, 'sortable' => false],
-            'total_units'     => ['label' => 'Total units',          'default' => false, 'sortable' => true],
-            'multiple_lines'  => ['label' => 'Multiple lines',       'default' => false, 'sortable' => true],
-            'buyer'           => ['label' => 'Buyer',                'default' => true,  'sortable' => true],
-            'postcode'        => ['label' => 'Postcode',             'default' => true,  'sortable' => true],
-            'total'           => ['label' => 'Total',                'default' => true,  'sortable' => true],
-            'shipping_method' => ['label' => 'Shipping method',      'default' => true,  'sortable' => true],
-            'status'          => ['label' => 'Status',               'default' => true,  'sortable' => true],
+    private function renderOutstandingTab(string $datasetHtml): void
+    {
+        $colChooser = [
+            'channel'         => ['label' => 'Channel', 'default' => true, 'locked' => true],
+            'order_number'    => ['label' => 'Order number', 'default' => true, 'locked' => true],
+            'channel_ref'     => ['label' => 'Channel order ref', 'default' => true],
+            'order_date'      => ['label' => 'Order date', 'default' => true],
+            'ship_by'         => ['label' => 'Ship by date', 'default' => true],
+            'product_skus'    => ['label' => 'Product SKUs', 'default' => true],
+            'brand'           => ['label' => 'Brand', 'default' => true],
+            'channel_name'    => ['label' => 'Channel product name', 'default' => false],
+            'total_units'     => ['label' => 'Total units', 'default' => false],
+            'multiple_lines'  => ['label' => 'Multiple lines', 'default' => false],
+            'packages'        => ['label' => 'Packages', 'default' => false],
+            'weight'          => ['label' => 'Order weight', 'default' => false],
+            'buyer'           => ['label' => 'Buyer', 'default' => true],
+            'postcode'        => ['label' => 'Postcode', 'default' => true],
+            'total'           => ['label' => 'Total', 'default' => true],
+            'shipping_method' => ['label' => 'Shipping method', 'default' => true],
+            'status'          => ['label' => 'Status', 'default' => true],
         ];
 
         echo '<div class="position-relative">';
-
-        // Create-pickwave POST form (action bar only). Order checkboxes use form="pw-create-form"
-        // so column GET filters are not nested inside this form (invalid HTML / broken submit).
         echo '<form method="post" action="' . $this->view->e($this->url->to('store/admin/pickwaves/create')) . '" id="pw-create-form">';
         echo $this->request->csrfField();
         echo '<div class="sf-pick-actions">';
@@ -1161,241 +1268,158 @@ class StoreAdminPickwaves extends Controller
         echo '<button type="submit" class="sf-pick-btn is-primary">Confirm</button>';
         echo '<button type="button" class="sf-pick-btn" id="pw-select-all-btn">Select all</button>';
         echo '<span class="sf-pick-count" id="pw-selected-count">0 selected</span>';
-        echo '<button type="button" class="sf-pick-btn is-icon" id="pw-col-toggle" title="Columns">'
-           . '<i class="bi bi-gear"></i></button>';
+        echo '<button type="button" class="sf-pick-btn is-icon ms-auto" id="pw-col-toggle" title="Columns">'
+           . '<i class="bi bi-wrench"></i></button>';
         echo '</div>';
         echo '</form>';
 
-        // Column chooser panel
-        echo '<div id="pw-col-panel" class="border rounded bg-primary-subtle p-3 mb-3" style="display:none;max-width:18rem;position:absolute;right:0;z-index:20;">';
-        echo '<div class="fw-semibold small mb-2 text-primary-emphasis">Columns</div>';
-        foreach ($columns as $key => $meta) {
-            $checked = $meta['default'] ? ' checked' : '';
-            echo '<label class="d-flex align-items-center gap-2 small mb-1">'
+        echo '<div id="pw-col-panel" class="sf-col-chooser border rounded bg-white shadow-sm p-3">';
+        echo '<div class="fw-semibold small mb-2">Columns</div>';
+        echo '<label class="d-flex align-items-center gap-2 small mb-2">'
+           . '<input type="checkbox" class="form-check-input" id="pw-col-select-all"> Select all</label>';
+        echo '<div class="sf-col-chooser-list">';
+        foreach ($colChooser as $key => $meta) {
+            $checked = !empty($meta['default']) ? ' checked' : '';
+            $disabled = !empty($meta['locked']) ? ' disabled' : '';
+            echo '<label class="d-flex align-items-center gap-2 small mb-1'
+               . (!empty($meta['locked']) ? ' text-muted' : '') . '">'
                . '<input type="checkbox" class="form-check-input pw-col-check" data-col="'
-               . $this->view->e($key) . '"' . $checked . '>'
-               . $this->view->e($meta['label']) . '</label>';
+               . $this->view->e($key) . '"' . $checked . $disabled . '>'
+               . $this->view->e((string) $meta['label']) . '</label>';
         }
+        echo '</div></div>';
+
+        echo $datasetHtml;
         echo '</div>';
 
-        echo '<div class="table-responsive"><table class="sf-pick-table" id="pw-orders-table">';
-        echo '<thead><tr>';
-        echo '<th style="width:2.5rem" class="text-nowrap">'
-           . '<input type="checkbox" class="form-check-input" id="pw-check-all" title="Select all" form="pw-create-form">'
-           . '<label class="visually-hidden" for="pw-check-all">Select all</label></th>';
-        foreach ($columns as $key => $meta) {
-            $align = in_array($key, ['total', 'total_units'], true) ? ' text-end' : '';
-            $sortable = !empty($meta['sortable']);
-            $active = $sortable && $sort === $key;
-            $cls = 'pw-sortable' . $align
-                . ($active ? ' pw-sort-active pw-sort-' . $dir : '');
-            echo '<th data-col="' . $this->view->e($key) . '" class="' . $this->view->e(trim($cls)) . '">';
-            if ($sortable) {
-                $nextDir = ($active && $dir === 'asc') ? 'desc' : 'asc';
-                if (!$active && in_array($key, ['order_date', 'ship_by', 'total', 'total_units'], true)) {
-                    $nextDir = 'desc';
-                }
-                $href = $this->url->to('store/admin/pickwaves', array_merge($queryBase, [
-                    'sort' => $key,
-                    'dir'  => $nextDir,
-                    'page' => 1,
-                ]));
-                echo '<a href="' . $this->view->e($href) . '" title="Sort by '
-                   . $this->view->e((string) $meta['label']) . '">'
-                   . '<span>' . $this->view->e((string) $meta['label']) . '</span>'
-                   . '<span class="pw-sort-icons" aria-hidden="true">'
-                   . '<i class="bi bi-caret-up-fill pw-sort-up"></i>'
-                   . '<i class="bi bi-caret-down-fill pw-sort-down"></i>'
-                   . '</span></a>';
-            } else {
-                echo $this->view->e((string) $meta['label']);
-            }
+        $defaultCols = array_keys(array_filter(
+            $colChooser,
+            static fn(array $meta): bool => !empty($meta['default']) || !empty($meta['locked'])
+        ));
+        $lockedCols = array_keys(array_filter(
+            $colChooser,
+            static fn(array $meta): bool => !empty($meta['locked'])
+        ));
+        $defaultsJson = json_encode($defaultCols, JSON_UNESCAPED_SLASHES);
+        $lockedJson = json_encode($lockedCols, JSON_UNESCAPED_SLASHES);
 
-            // Per-column filters (Store-style under header)
-            if ($key === 'product_skus') {
-                echo '<div class="pw-col-filter">'
-                   . '<form method="get" action="' . $this->view->e($this->url->to('store/admin/pickwaves')) . '" id="pw-sku-col-form">'
-                   . '<input type="hidden" name="tab" value="overview">'
-                   . '<input type="hidden" name="sort" value="' . $this->view->e($sort) . '">'
-                   . '<input type="hidden" name="dir" value="' . $this->view->e($dir) . '">'
-                   . ($channelId > 0 ? '<input type="hidden" name="channel_id" value="' . $channelId . '">' : '')
-                   . ($search !== '' ? '<input type="hidden" name="q" value="' . $this->view->e($search) . '">' : '');
-                foreach ($brands as $b) {
-                    echo '<input type="hidden" name="brands[]" value="' . $this->view->e($b) . '">';
-                }
-                echo '<input type="text" name="sku" id="pw-sku-col-input" value="' . $this->view->e($skuFilter)
-                   . '" placeholder="Filter SKU / name" autocomplete="off">'
-                   . '</form></div>';
-            }
-            if ($key === 'brand') {
-                $brandLabel = $brands === []
-                    ? 'All'
-                    : (count($brands) === 1 ? $brands[0] : (count($brands) . ' selected'));
-                echo '<div class="pw-col-filter dropdown">'
-                   . '<button type="button" class="sf-pick-dd dropdown-toggle"'
-                   . ' data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">'
-                   . $this->view->e($brandLabel) . '</button>'
-                   . '<div class="dropdown-menu p-2" id="pw-brand-dd">'
-                   . '<form method="get" action="' . $this->view->e($this->url->to('store/admin/pickwaves')) . '" id="pw-brand-form">'
-                   . '<input type="hidden" name="tab" value="overview">'
-                   . '<input type="hidden" name="sort" value="' . $this->view->e($sort) . '">'
-                   . '<input type="hidden" name="dir" value="' . $this->view->e($dir) . '">'
-                   . ($channelId > 0 ? '<input type="hidden" name="channel_id" value="' . $channelId . '">' : '')
-                   . ($search !== '' ? '<input type="hidden" name="q" value="' . $this->view->e($search) . '">' : '')
-                   . ($skuFilter !== '' ? '<input type="hidden" name="sku" value="' . $this->view->e($skuFilter) . '">' : '')
-                   . '<input type="search" class="form-control form-control-sm mb-2" id="pw-brand-search" placeholder="Search brands…" autocomplete="off">'
-                   . '<label class="d-flex align-items-center gap-2 small mb-1 pw-brand-opt show">'
-                   . '<input type="checkbox" class="form-check-input" id="pw-brand-all"'
-                   . ($brands === [] ? ' checked' : '') . '> All</label>';
-                foreach ($brandOptions as $opt) {
-                    $b = (string) $opt['brand'];
-                    $checked = in_array($b, $brands, true) ? ' checked' : '';
-                    $count = (int) $opt['order_count'];
-                    echo '<label class="d-flex align-items-center gap-2 small mb-1 pw-brand-opt show"'
-                       . ' data-brand="' . $this->view->e(strtolower($b)) . '">'
-                       . '<input type="checkbox" class="form-check-input pw-brand-check" name="brands[]" value="'
-                       . $this->view->e($b) . '"' . $checked . '>'
-                       . $this->view->e($b)
-                       . ' <span class="text-muted">(' . $count . ')</span>'
-                       . '</label>';
-                }
-                if ($brandOptions === []) {
-                    echo '<div class="small text-muted px-1">No brands yet — set Brand on products.</div>';
-                }
-                echo '<button type="submit" class="btn btn-primary btn-sm w-100 mt-2">Apply</button>'
-                   . '</form></div></div>';
-            }
-            echo '</th>';
-        }
-        echo '</tr></thead><tbody>';
-
-        foreach ($outstanding as $r) {
-            $oid      = (int) $r['id'];
-            $items    = $itemsBy[$oid] ?? [];
-            $postcode = $this->extractPostcode($r['shipping_address'] ?? null);
-            $shipBy   = $this->extractShipBy($r['shipping_address'] ?? null);
-            $units    = 0;
-            $brandSet = [];
-            foreach ($items as $it) {
-                $units += max(1, (int) ($it['qty'] ?? 1));
-                $b = trim((string) ($it['brand'] ?? ''));
-                if ($b !== '') {
-                    $brandSet[$b] = true;
-                }
-            }
-            $lineCount = count($items);
-            $extId     = (string) $r['external_order_id'];
-            $method    = trim((string) ($r['shipping_method'] ?? ''));
-            $brandList = array_keys($brandSet);
-            sort($brandList, SORT_STRING | SORT_FLAG_CASE);
-
-            $cells = [
-                'channel'         => $this->view->e((string) ($r['channel_label'] ?? $r['channel_name'])),
-                'order_number'    => '<a href="' . $this->view->e($this->url->to('store/admin/orders/view', ['id' => $oid])) . '">'
-                    . $this->view->e($extId) . '</a>',
-                'channel_ref'     => '<code class="small">' . $this->view->e($extId) . '</code>',
-                'order_date'      => $this->view->e($this->formatWhen((string) $r['created_at'])),
-                'ship_by'         => $shipBy !== ''
-                    ? '<span class="small text-nowrap">' . $this->view->e($shipBy) . '</span>'
-                    : '<span class="text-muted">—</span>',
-                'product_skus'    => $this->renderSkuList($items),
-                'brand'           => $brandList !== []
-                    ? '<span class="small">' . $this->view->e(implode(', ', $brandList)) . '</span>'
-                    : '<span class="text-muted">—</span>',
-                'channel_name'    => '<span class="small">' . $this->renderTitleList($items) . '</span>',
-                'total_units'     => (string) $units,
-                'multiple_lines'  => $lineCount > 1
-                    ? '<span class="badge text-bg-info">' . $lineCount . '</span>'
-                    : '<span class="text-muted">1</span>',
-                'buyer'           => '<span class="sf-pick-clip">' . $this->view->e((string) $r['buyer_username']) . '</span>'
-                    . '<span class="sf-pick-sub">' . $this->view->e((string) $r['shipping_name']) . '</span>',
-                'postcode'        => $this->view->e($postcode !== '' ? $postcode : '—'),
-                'total'           => number_format((float) $r['total'], 2) . ' ' . $this->view->e((string) $r['currency']),
-                'shipping_method' => $method !== ''
-                    ? '<span class="small">' . $this->view->e($method) . '</span>'
-                    : '<span class="text-muted">—</span>',
-                'status'          => '<span class="sf-pick-pill">' . $this->view->e((string) $r['status']) . '</span>',
-            ];
-
-            echo '<tr>';
-            echo '<td><input type="checkbox" class="form-check-input pw-order" name="order_ids[]" value="'
-               . $oid . '" form="pw-create-form"></td>';
-            foreach ($columns as $key => $meta) {
-                $align = in_array($key, ['total', 'total_units'], true) ? ' class="text-end text-nowrap"' : '';
-                if ($key === 'postcode' || $key === 'ship_by') {
-                    $align = ' class="text-nowrap"';
-                }
-                echo '<td data-col="' . $this->view->e($key) . '"' . $align . '>'
-                   . ($cells[$key] ?? '—') . '</td>';
-            }
-            echo '</tr>';
-        }
-        echo '</tbody></table></div>';
-        echo '</div>';
-
-        // Column visibility script
-        $defaultsJson = json_encode(
-            array_keys(array_filter($columns, static fn($m) => $m['default'])),
-            JSON_UNESCAPED_SLASHES
-        );
         echo <<<HTML
 <script>
 (function () {
-  const KEY = 'sf.pickwaves.cols';
+  const KEY = 'sf.pickwaves.cols.v2';
   const defaults = {$defaultsJson};
+  const locked = new Set({$lockedJson});
   const panel = document.getElementById('pw-col-panel');
   const toggle = document.getElementById('pw-col-toggle');
   const checks = () => Array.from(document.querySelectorAll('.pw-col-check'));
+  const selectAllBtn = document.getElementById('pw-select-all-btn');
+  const countEl = document.getElementById('pw-selected-count');
 
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
       if (!raw) return defaults.slice();
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : defaults.slice();
+      if (!Array.isArray(parsed)) return defaults.slice();
+      return Array.from(new Set(parsed.concat(Array.from(locked))));
     } catch (e) { return defaults.slice(); }
   }
-
   function apply(visible) {
-    const set = new Set(visible);
+    const set = new Set(visible.concat(Array.from(locked)));
     checks().forEach(function (cb) {
+      if (locked.has(cb.dataset.col)) {
+        cb.checked = true;
+        return;
+      }
       cb.checked = set.has(cb.dataset.col);
     });
-    document.querySelectorAll('#pw-orders-table [data-col]').forEach(function (el) {
-      el.style.display = set.has(el.getAttribute('data-col')) ? '' : 'none';
+    // Only toggle table cells/headers — never the chooser checkboxes (they also have data-col).
+    document.querySelectorAll('.sf-pick-card table [data-col]').forEach(function (el) {
+      const col = el.getAttribute('data-col');
+      if (!col || col === 'sel') return;
+      if (el.classList.contains('pw-col-check')) return;
+      el.style.display = set.has(col) ? 'table-cell' : 'none';
     });
   }
-
   function save() {
     const visible = checks().filter(function (c) { return c.checked; }).map(function (c) { return c.dataset.col; });
     localStorage.setItem(KEY, JSON.stringify(visible));
     apply(visible);
   }
 
-  apply(load());
-  toggle.addEventListener('click', function () {
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-  });
-  checks().forEach(function (cb) { cb.addEventListener('change', save); });
-  document.addEventListener('click', function (e) {
-    if (!panel.contains(e.target) && e.target !== toggle && !toggle.contains(e.target)) {
-      panel.style.display = 'none';
+  function placePanel() {
+    if (!toggle || !panel) return;
+    const r = toggle.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom - 12;
+    const spaceAbove = r.top - 12;
+    panel.style.position = 'fixed';
+    panel.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+    panel.style.left = 'auto';
+    panel.style.zIndex = '1080';
+    if (spaceBelow < 180 && spaceAbove > spaceBelow) {
+      panel.style.top = 'auto';
+      panel.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+      panel.style.maxHeight = Math.max(160, spaceAbove) + 'px';
+    } else {
+      panel.style.bottom = 'auto';
+      panel.style.top = (r.bottom + 6) + 'px';
+      panel.style.maxHeight = Math.max(160, spaceBelow) + 'px';
     }
-  });
+  }
+  function syncSelectAll() {
+    const all = document.getElementById('pw-col-select-all');
+    if (!all) return;
+    const toggleable = checks().filter(function (c) { return !locked.has(c.dataset.col); });
+    const on = toggleable.filter(function (c) { return c.checked; }).length;
+    all.checked = toggleable.length > 0 && on === toggleable.length;
+    all.indeterminate = on > 0 && on < toggleable.length;
+  }
+  function openPanel() {
+    panel.style.display = 'flex';
+    placePanel();
+    syncSelectAll();
+  }
+  function closePanel() {
+    panel.style.display = 'none';
+  }
 
-  const checkAll = document.getElementById('pw-check-all');
-  const selectAllBtn = document.getElementById('pw-select-all-btn');
-  const countEl = document.getElementById('pw-selected-count');
+  apply(load());
+  syncSelectAll();
+  if (toggle && panel) {
+    toggle.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (panel.style.display === 'flex') closePanel();
+      else openPanel();
+    });
+    checks().forEach(function (cb) {
+      cb.addEventListener('change', function () { save(); syncSelectAll(); });
+    });
+    const selectAll = document.getElementById('pw-col-select-all');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        checks().forEach(function (c) {
+          if (!locked.has(c.dataset.col)) c.checked = selectAll.checked;
+        });
+        save();
+        syncSelectAll();
+      });
+    }
+    window.addEventListener('resize', function () {
+      if (panel.style.display === 'flex') placePanel();
+    });
+    document.addEventListener('click', function (e) {
+      if (!panel.contains(e.target) && e.target !== toggle && !toggle.contains(e.target)) {
+        closePanel();
+      }
+    });
+  }
+
   function orderBoxes() {
     return Array.prototype.slice.call(document.querySelectorAll('.pw-order'));
   }
   function syncSelect() {
     const list = orderBoxes();
     const n = list.filter(function (c) { return c.checked; }).length;
-    if (checkAll) {
-      checkAll.checked = list.length > 0 && n === list.length;
-      checkAll.indeterminate = n > 0 && n < list.length;
-    }
     if (countEl) countEl.textContent = n + ' selected';
     if (selectAllBtn) selectAllBtn.textContent = (n === list.length && list.length > 0) ? 'Clear all' : 'Select all';
   }
@@ -1403,7 +1427,6 @@ class StoreAdminPickwaves extends Controller
     orderBoxes().forEach(function (c) { c.checked = !!on; });
     syncSelect();
   }
-  if (checkAll) checkAll.addEventListener('change', function () { setAll(checkAll.checked); });
   if (selectAllBtn) {
     selectAllBtn.addEventListener('click', function () {
       const list = orderBoxes();
@@ -1413,55 +1436,9 @@ class StoreAdminPickwaves extends Controller
   }
   orderBoxes().forEach(function (c) { c.addEventListener('change', syncSelect); });
   syncSelect();
-
-  // Brand column filter (searchable multi-select)
-  const brandSearch = document.getElementById('pw-brand-search');
-  const brandAll = document.getElementById('pw-brand-all');
-  const brandChecks = () => Array.from(document.querySelectorAll('.pw-brand-check'));
-  if (brandSearch) {
-    brandSearch.addEventListener('input', function () {
-      const q = (brandSearch.value || '').trim().toLowerCase();
-      document.querySelectorAll('#pw-brand-dd .pw-brand-opt[data-brand]').forEach(function (el) {
-        const hay = el.getAttribute('data-brand') || '';
-        el.classList.toggle('show', !q || hay.indexOf(q) >= 0);
-      });
-    });
-  }
-  if (brandAll) {
-    brandAll.addEventListener('change', function () {
-      if (brandAll.checked) {
-        brandChecks().forEach(function (c) { c.checked = false; });
-      }
-    });
-  }
-  brandChecks().forEach(function (c) {
-    c.addEventListener('change', function () {
-      if (c.checked && brandAll) brandAll.checked = false;
-      if (brandAll && brandChecks().every(function (x) { return !x.checked; })) {
-        brandAll.checked = true;
-      }
-    });
-  });
-
-  // Product SKUs column filter — Enter submits (SKU or product name)
-  const skuColForm = document.getElementById('pw-sku-col-form');
-  const skuColInput = document.getElementById('pw-sku-col-input');
-  if (skuColInput && skuColForm) {
-    skuColInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        skuColForm.submit();
-      }
-    });
-  }
 })();
 </script>
 HTML;
-
-        echo Paginator::make($total, $page, 50)->render(
-            fn (int $p) => $this->url->to('store/admin/pickwaves', $queryBase + ['page' => $p]),
-            ['theme' => 'bootstrap-sm', 'class' => 'mb-0']
-        );
     }
 
     /**
@@ -1618,46 +1595,14 @@ HTML;
     }
 
     /**
-     * Store-style "Product SKUs" cell: prefer SKU, fall back to title.
+     * Store-style "Product SKUs" cell: short SKU x qty.
      *
-     * @param array<int, array{external_sku?: string, title?: string, qty?: int}> $items
+     * @param array<int, array{external_sku?: string, title?: string, qty?: int, product_id?: int}> $items
      */
     private function renderSkuList(array $items): string
     {
-        if ($items === []) {
-            return '<span class="text-muted">—</span>';
-        }
-
-        $html  = '';
-        $shown = 0;
-        foreach ($items as $item) {
-            if ($shown >= 3) {
-                break;
-            }
-            $sku   = trim((string) ($item['external_sku'] ?? ''));
-            $title = trim((string) ($item['title'] ?? ''));
-            $qty   = max(1, (int) ($item['qty'] ?? 1));
-            $label = $sku !== '' ? $sku : $title;
-            if ($label === '') {
-                continue;
-            }
-            $html .= '<span class="sf-pick-sku" title="' . $this->view->e($title !== '' ? $title : $label) . '">';
-            if ($sku !== '') {
-                $html .= '<code>' . $this->view->e($sku) . '</code>';
-                if ($title !== '' && strcasecmp($title, $sku) !== 0) {
-                    $html .= ' ' . $this->view->e($this->truncate($title, 28));
-                }
-            } else {
-                $html .= $this->view->e($this->truncate($title, 36));
-            }
-            $html .= ' ×' . $qty . '</span>';
-            $shown++;
-        }
-        $extra = count($items) - $shown;
-        if ($extra > 0) {
-            $html .= '<br><span class="text-muted">+' . $extra . ' more</span>';
-        }
-        return $html !== '' ? $html : '<span class="text-muted">—</span>';
+        $productUrl = fn(int $id): string => $this->url->to('store/admin/products/edit', ['id' => $id]);
+        return store_render_short_skus($items, $productUrl);
     }
 
     /**
@@ -1810,7 +1755,10 @@ HTML;
 .sf-pick-tabs a:hover,.sf-pick-mini a:hover{background:#f3f4f6;color:#111827}
 .sf-pick-tabs a.is-on,.sf-pick-mini a.is-on{background:#dbeafe;color:#1d4ed8}
 .sf-pick-top{display:grid;grid-template-columns:16.5rem minmax(0,1fr);gap:.75rem;margin-bottom:.75rem}
-.sf-pick-card{background:#fff;border:1px solid #e5e7eb;border-radius:.7rem;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04);min-width:0}
+.sf-pick-card{background:#fff;border:1px solid #e5e7eb;border-radius:.7rem;overflow:visible;box-shadow:0 1px 2px rgba(16,24,40,.04);min-width:0}
+.sf-pick-card .table-responsive,.sf-pick-card .dataset .card{border-radius:.7rem;overflow:hidden}
+.sf-col-chooser{display:none;flex-direction:column;width:18rem;max-width:calc(100vw - 1rem);background:#fff;border:1px solid #e5e7eb;border-radius:.5rem;box-shadow:0 12px 32px rgba(15,23,42,.18);padding:.75rem;z-index:1080;overflow:hidden}
+.sf-col-chooser-list{flex:1 1 auto;min-height:0;overflow:auto;padding-right:.15rem}
 .sf-pick-card-h{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.65rem 1rem;border-bottom:1px solid #eef0f3}
 .sf-pick-card-h h2{margin:0;font-size:.92rem;font-weight:650}
 .sf-pick-card-h span{font-size:.78rem;color:#6b7280;font-weight:600}

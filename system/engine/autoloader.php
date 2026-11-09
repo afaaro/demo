@@ -76,12 +76,10 @@ class Autoloader
             ?? $this->resolveFromDirectories($class);
 
         if ($file === null) {
-            error_log("[Autoloader] Miss: {$class}");
             $this->missed[$class] = true;
             return false;
         }
 
-        error_log("[Autoloader] Hit: {$class} → {$file}");
         require_once $file;
         return $file;
     }

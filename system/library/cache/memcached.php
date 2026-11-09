@@ -57,6 +57,17 @@ class Memcached
         $this->memcached->delete($this->prefix . $key);
     }
 
+    public function increment(string $key, int $ttl = 60): int
+    {
+        $full = $this->prefix . $key;
+        $value = $this->memcached->increment($full, 1);
+        if ($value === false) {
+            $this->memcached->set($full, 1, max(1, $ttl));
+            return 1;
+        }
+        return (int) $value;
+    }
+
     public function flush(): bool
     {
         return $this->memcached->flush();

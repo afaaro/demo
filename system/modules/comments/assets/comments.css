@@ -30,9 +30,9 @@
 .site-comments__post {
     justify-self: start;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-sm, 8px);
     padding: 0.4rem 0.9rem;
-    background: #111827;
+    background: var(--brand, #2563eb);
     color: #fff;
     font-size: 0.85rem;
     font-weight: 650;
@@ -106,8 +106,8 @@
 }
 
 .site-comments-hub__filters a.is-active {
-    background: #111827;
-    border-color: #111827;
+    background: var(--brand, #2563eb);
+    border-color: var(--brand, #2563eb);
     color: #fff;
 }
 

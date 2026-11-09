@@ -263,14 +263,23 @@ class ErrorHandler
             // Logger not ready — write to PHP's error log.
         }
 
+        $debug = false;
+        try {
+            $debug = (bool) registry('config')->get('error.debug', false);
+        } catch (Throwable) {
+            $debug = (bool) (defined('DEBUG') && DEBUG);
+        }
+
         $record = [
             'date'    => date('Y-m-d H:i:s'),
             'type'    => get_class($exception),
             'message' => $exception->getMessage(),
             'file'    => $exception->getFile(),
             'line'    => $exception->getLine(),
-            'trace'   => $exception->getTraceAsString(),
         ];
+        if ($debug) {
+            $record['trace'] = $exception->getTraceAsString();
+        }
         $encoded = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         error_log($encoded === false ? '{"error":"json_encode failed"}' : $encoded);
     }

@@ -129,6 +129,12 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
     ],
+    'tools/admin/database/drop' => [
+        'controller' => 'tools/admin/database',
+        'action'     => 'drop',
+        'auth'       => true,
+        'methods'    => ['POST'],
+    ],
 
     // Logs
     'tools/admin/logs' => [

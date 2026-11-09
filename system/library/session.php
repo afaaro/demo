@@ -589,14 +589,30 @@ class Session
             return true;
         }
 
-        // IONOS (and most managed hosts) terminate TLS at a proxy.
-        $fwd = strtolower(trim(
-            explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]
-        ));
-        if ($fwd === 'https') {
-            return true;
+        // Only trust forwarded proto from local/private proxies (not arbitrary clients).
+        $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        if ($remote !== '' && $this->isTrustedProxyAddr($remote)) {
+            $fwd = strtolower(trim(
+                explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]
+            ));
+            if ($fwd === 'https') {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private function isTrustedProxyAddr(string $ip): bool
+    {
+        if (in_array($ip, ['127.0.0.1', '::1'], true)) {
+            return true;
+        }
+        // Private / link-local ranges commonly used by hosting reverse proxies.
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false;
     }
 }

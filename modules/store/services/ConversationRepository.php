@@ -60,45 +60,76 @@ final class ConversationRepository
     }
 
     /**
+     * Resolve the tenant used for reads. Prefer the channel's own tenant so
+     * Mail ↔ Conversations tab switches cannot hide rows when ambient
+     * TenantContext briefly disagrees with the channel.
+     */
+    private function resolveTenantId(?int $tenantId = null): int
+    {
+        if ($tenantId !== null && $tenantId > 0) {
+            return $tenantId;
+        }
+        if (TenantContext::get()->has()) {
+            return $this->tenantId();
+        }
+        return 0;
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
-    public function paginate(int $channelId, int $limit = 25, int $offset = 0): array
+    public function paginate(int $channelId, int $limit = 25, int $offset = 0, ?int $tenantId = null): array
     {
-        if (!TenantContext::get()->has()) {
+        $tid = $this->resolveTenantId($tenantId);
+        if ($tid <= 0) {
             return [];
         }
-        $this->rebindChannelTenant($channelId, $this->tenantId());
         return $this->db->query(
             "SELECT * FROM `#__store_conversations`
               WHERE `channel_id` = ? AND `tenant_id` = ?
               ORDER BY `latest_date` DESC, `id` DESC
               LIMIT ? OFFSET ?",
-            [$channelId, $this->tenantId(), $limit, $offset]
+            [$channelId, $tid, $limit, $offset]
         )->rows;
     }
 
-    public function count(int $channelId): int
+    public function count(int $channelId, ?int $tenantId = null): int
     {
-        if (!TenantContext::get()->has()) {
+        $tid = $this->resolveTenantId($tenantId);
+        if ($tid <= 0) {
             return 0;
         }
-        $this->rebindChannelTenant($channelId, $this->tenantId());
         return (int) $this->db->query(
             "SELECT COUNT(*) FROM `#__store_conversations` WHERE `channel_id` = ? AND `tenant_id` = ?",
-            [$channelId, $this->tenantId()]
+            [$channelId, $tid]
         )->value;
     }
 
-    public function countUnread(int $channelId): int
+    public function countUnread(int $channelId, ?int $tenantId = null): int
     {
-        if (!TenantContext::get()->has()) {
+        $tid = $this->resolveTenantId($tenantId);
+        if ($tid <= 0) {
             return 0;
         }
         return (int) $this->db->query(
             "SELECT COUNT(*) FROM `#__store_conversations`
               WHERE `channel_id` = ? AND `tenant_id` = ? AND `unread_count` > 0",
-            [$channelId, $this->tenantId()]
+            [$channelId, $tid]
         )->value;
+    }
+
+    public function lastSyncedAt(int $channelId, ?int $tenantId = null): ?string
+    {
+        $tid = $this->resolveTenantId($tenantId);
+        if ($tid <= 0) {
+            return null;
+        }
+        $value = $this->db->query(
+            "SELECT MAX(`synced_at`) FROM `#__store_conversations`
+              WHERE `channel_id` = ? AND `tenant_id` = ?",
+            [$channelId, $tid]
+        )->value;
+        return $value ? (string) $value : null;
     }
 
     /**
@@ -118,6 +149,11 @@ final class ConversationRepository
 
         $latest = is_array($conv['latestMessage'] ?? null) ? $conv['latestMessage'] : [];
 
+        $incomingBody   = mb_substr((string) ($latest['messageBody'] ?? ''), 0, 1000);
+        $incomingSender = (string) ($latest['senderUsername'] ?? '');
+        $incomingMsgId  = (string) ($latest['messageId'] ?? '');
+        $incomingDate   = $this->parseDate((string) ($latest['createdDate'] ?? ''));
+
         $data = [
             'channel_id'        => $channelId,
             'external_id'       => $externalId,
@@ -126,15 +162,21 @@ final class ConversationRepository
             'reference_id'      => (string) ($conv['referenceId']        ?? ''),
             'reference_type'    => (string) ($conv['referenceType']      ?? ''),
             'unread_count'      => (int)    ($conv['unreadCount']        ?? 0),
-            'latest_message_id' => (string) ($latest['messageId']        ?? ''),
-            'latest_body'       => mb_substr((string) ($latest['messageBody'] ?? ''), 0, 1000),
-            'latest_sender'     => (string) ($latest['senderUsername']   ?? ''),
-            'latest_date'       => $this->parseDate((string) ($latest['createdDate'] ?? '')),
+            'latest_message_id' => $incomingMsgId,
+            'latest_body'       => $incomingBody,
+            'latest_sender'     => $incomingSender,
+            'latest_date'       => $incomingDate,
             'synced_at'         => date('Y-m-d H:i:s'),
         ];
 
         $existing = $this->find($channelId, $externalId);
-        $data = $this->withTenant($data);
+        // Prefer the existing row's tenant, then ambient context — avoids writing
+        // headers under the wrong "Working in" tenant during tab switches.
+        if ($existing !== null && (int) ($existing['tenant_id'] ?? 0) > 0) {
+            $data['tenant_id'] = (int) $existing['tenant_id'];
+        } else {
+            $data = $this->withTenant($data);
+        }
 
         if ($existing === null) {
             try {
@@ -147,6 +189,28 @@ final class ConversationRepository
                     throw $e;
                 }
             }
+        }
+
+        if ((int) ($existing['tenant_id'] ?? 0) > 0) {
+            $data['tenant_id'] = (int) $existing['tenant_id'];
+        }
+
+        // Never blank out a good list preview when eBay omits latestMessage fields.
+        if ($incomingBody === '' && trim((string) ($existing['latest_body'] ?? '')) !== '') {
+            unset($data['latest_body']);
+        }
+        if ($incomingSender === '' && trim((string) ($existing['latest_sender'] ?? '')) !== '') {
+            unset($data['latest_sender']);
+        }
+        if ($incomingMsgId === '' && trim((string) ($existing['latest_message_id'] ?? '')) !== '') {
+            unset($data['latest_message_id']);
+        }
+        if ($incomingDate === null && !empty($existing['latest_date'])) {
+            unset($data['latest_date']);
+        }
+        // Keep a richer local type (e.g. after thread open) if payload type is empty.
+        if ($data['conversation_type'] === '' && trim((string) ($existing['conversation_type'] ?? '')) !== '') {
+            unset($data['conversation_type']);
         }
 
         $this->db->update('store_conversations', $data, ['id' => (int) $existing['id']]);
@@ -198,16 +262,35 @@ final class ConversationRepository
      *
      * @return array<int, array<string, mixed>>
      */
-    public function messagesFor(int $channelId, string $conversationId): array
+    public function messagesFor(int $channelId, string $conversationId, ?int $tenantId = null): array
     {
-        if (!TenantContext::get()->has()) {
-            return [];
+        $tid = $this->resolveTenantId($tenantId);
+        if ($tid <= 0) {
+            // Fall back: thread id is unique per channel — still show cached rows
+            // if ambient tenant context is missing/mismatched.
+            return $this->db->query(
+                "SELECT * FROM `#__store_conversation_messages`
+                  WHERE `channel_id` = ? AND `conversation_id` = ?
+                  ORDER BY `created_date` ASC, `id` ASC",
+                [$channelId, $conversationId]
+            )->rows;
         }
-        return $this->db->query(
+        $rows = $this->db->query(
             "SELECT * FROM `#__store_conversation_messages`
               WHERE `channel_id` = ? AND `conversation_id` = ? AND `tenant_id` = ?
               ORDER BY `created_date` ASC, `id` ASC",
-            [$channelId, $conversationId, $this->tenantId()]
+            [$channelId, $conversationId, $tid]
+        )->rows;
+        if ($rows !== []) {
+            return $rows;
+        }
+        // Tenant drift: show any cached messages for this thread rather than
+        // an empty pane after Mail ↔ Conversations navigation.
+        return $this->db->query(
+            "SELECT * FROM `#__store_conversation_messages`
+              WHERE `channel_id` = ? AND `conversation_id` = ?
+              ORDER BY `created_date` ASC, `id` ASC",
+            [$channelId, $conversationId]
         )->rows;
     }
 
@@ -229,13 +312,15 @@ final class ConversationRepository
         $tid = $this->tenantId();
         $createdIso = (string) ($msg['createdDate'] ?? '');
 
+        $incomingBody = (string) ($msg['messageBody'] ?? '');
+
         $data = [
             'channel_id'      => $channelId,
             'conversation_id' => $conversationId,
             'external_id'     => $externalId,
             'sender'          => (string) ($msg['senderUsername']    ?? ''),
             'recipient'       => (string) ($msg['recipientUsername'] ?? ''),
-            'body'            => (string) ($msg['messageBody']       ?? ''),
+            'body'            => $incomingBody,
             'read_status'     => array_key_exists('readStatus', $msg)
                 ? (!empty($msg['readStatus']) ? 1 : 0)
                 : 0,
@@ -246,7 +331,7 @@ final class ConversationRepository
         $data = $this->withTenant($data);
 
         $existing = $this->db->query(
-            "SELECT `id` FROM `#__store_conversation_messages`
+            "SELECT `id`, `body`, `sender`, `recipient`, `created_date` FROM `#__store_conversation_messages`
               WHERE `channel_id` = ? AND `external_id` = ?
               LIMIT 1",
             [$channelId, $externalId]
@@ -258,7 +343,7 @@ final class ConversationRepository
                 return 'created';
             } catch (\Throwable $e) {
                 $existing = $this->db->query(
-                    "SELECT `id` FROM `#__store_conversation_messages`
+                    "SELECT `id`, `body`, `sender`, `recipient`, `created_date` FROM `#__store_conversation_messages`
                       WHERE `channel_id` = ? AND `external_id` = ?
                       LIMIT 1",
                     [$channelId, $externalId]
@@ -267,6 +352,20 @@ final class ConversationRepository
                     throw $e;
                 }
             }
+        }
+
+        // Keep a previously fetched body if this payload has none (headers / sparse sync).
+        if ($incomingBody === '' && trim((string) ($existing['body'] ?? '')) !== '') {
+            unset($data['body']);
+        }
+        if ($data['sender'] === '' && trim((string) ($existing['sender'] ?? '')) !== '') {
+            unset($data['sender']);
+        }
+        if ($data['recipient'] === '' && trim((string) ($existing['recipient'] ?? '')) !== '') {
+            unset($data['recipient']);
+        }
+        if ($data['created_date'] === null && !empty($existing['created_date'])) {
+            unset($data['created_date']);
         }
 
         $this->db->update(

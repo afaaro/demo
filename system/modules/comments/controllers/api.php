@@ -15,6 +15,12 @@ class CommentsApi extends Controller
         $limit = (int) $this->request->get('limit', 'int', 50);
 
         $repo = new CommentRepository($this->db);
+        $viewerId = (int) ($this->auth->id() ?? 0);
+        if (!$repo->viewerCanAccess($module, $entityType, $entityId, $viewerId > 0 ? $viewerId : null)) {
+            echo json_encode(['success' => false, 'error' => 'Content not found.', 'comments' => []]);
+            return;
+        }
+
         $rows = $repo->forEntity($module, $entityType, $entityId, $limit, true);
 
         require_once get_module_path('comments') . '/helpers/functions.php';
@@ -67,7 +73,7 @@ class CommentsApi extends Controller
         }
 
         $repo = new CommentRepository($this->db);
-        if (!$repo->entityExists($module, $entityType, $entityId)) {
+        if (!$repo->viewerCanAccess($module, $entityType, $entityId, $userId)) {
             echo json_encode(['success' => false, 'error' => 'Content not found.']);
             return;
         }

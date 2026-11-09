@@ -1106,46 +1106,120 @@ final class EbayChannelClient implements ChannelClientInterface
             ? 'https://api.sandbox.ebay.com/commerce/message/v1'
             : 'https://api.ebay.com/commerce/message/v1';
 
-        $url = $base . '/conversation/' . rawurlencode($conversationId)
-            . '?conversation_type=' . rawurlencode($conversationType);
+        $messages = [];
+        $offset   = 0;
+        $limit    = 50;
+        $guard    = 0;
+        $meta     = [];
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, EbayCurl::withSsl([
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_HTTPHEADER     => [
-                'Accept: application/json',
-                'Authorization: Bearer ' . $token,
-                'X-EBAY-C-MARKETPLACE-ID: ' . $marketplace,
-            ],
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-        ]));
+        do {
+            $query = http_build_query([
+                'conversation_type' => $conversationType,
+                'limit'             => $limit,
+                'offset'            => $offset,
+            ], '', '&', PHP_QUERY_RFC3986);
 
-        $body = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err  = curl_error($ch);
-        curl_close($ch);
+            $url = $base . '/conversation/' . rawurlencode($conversationId) . '?' . $query;
 
-        if ($body === false) {
-            throw new RuntimeException("eBay conversation API cURL error: {$err}");
+            $ch = curl_init($url);
+            curl_setopt_array($ch, EbayCurl::withSsl([
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_TIMEOUT        => 30,
+                CURLOPT_HTTPHEADER     => [
+                    'Accept: application/json',
+                    'Authorization: Bearer ' . $token,
+                    'X-EBAY-C-MARKETPLACE-ID: ' . $marketplace,
+                ],
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+            ]));
+
+            $body = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err  = curl_error($ch);
+            curl_close($ch);
+
+            if ($body === false) {
+                throw new RuntimeException("eBay conversation API cURL error: {$err}");
+            }
+
+            $decoded = json_decode($body, true);
+            if (!is_array($decoded)) {
+                throw new RuntimeException("eBay conversation API returned non-JSON (HTTP {$code}).");
+            }
+            if ($code < 200 || $code >= 300) {
+                $msg = $this->extractEbayErrorMessage($decoded);
+                throw new RuntimeException("eBay conversation API failed (HTTP {$code}): {$msg}");
+            }
+
+            if ($meta === []) {
+                $meta = $decoded;
+            }
+
+            $pageMsgs = is_array($decoded['messages'] ?? null)
+                ? array_values(array_filter($decoded['messages'], 'is_array'))
+                : [];
+            foreach ($pageMsgs as $m) {
+                $messages[] = $this->normalizeConversationMessage($m);
+            }
+
+            $nextUri = isset($decoded['next']) ? trim((string) $decoded['next']) : '';
+            if ($nextUri === '' || $pageMsgs === []) {
+                break;
+            }
+
+            $nextOffset = null;
+            $qs = parse_url($nextUri, PHP_URL_QUERY);
+            if (is_string($qs) && $qs !== '') {
+                parse_str($qs, $params);
+                if (isset($params['offset']) && is_numeric($params['offset'])) {
+                    $nextOffset = (int) $params['offset'];
+                }
+            }
+            if ($nextOffset === null) {
+                $nextOffset = $offset + count($pageMsgs);
+            }
+            if ($nextOffset <= $offset) {
+                break;
+            }
+            $offset = $nextOffset;
+            $guard++;
+        } while ($guard < 20);
+
+        $meta['messages'] = $messages;
+        return $meta;
+    }
+
+    /**
+     * Normalize eBay message field name variants into the camelCase shape
+     * ConversationRepository expects.
+     *
+     * @param array<string, mixed> $msg
+     * @return array<string, mixed>
+     */
+    private function normalizeConversationMessage(array $msg): array
+    {
+        if (!isset($msg['messageBody']) && isset($msg['messageText'])) {
+            $msg['messageBody'] = $msg['messageText'];
         }
-
-        $decoded = json_decode($body, true);
-        if (!is_array($decoded)) {
-            throw new RuntimeException("eBay conversation API returned non-JSON (HTTP {$code}).");
+        if (!isset($msg['senderUsername'])) {
+            $msg['senderUsername'] = $msg['senderUserName']
+                ?? $msg['sender']
+                ?? '';
         }
-        if ($code < 200 || $code >= 300) {
-            $msg = $this->extractEbayErrorMessage($decoded);
-            throw new RuntimeException("eBay conversation API failed (HTTP {$code}): {$msg}");
+        if (!isset($msg['recipientUsername'])) {
+            $msg['recipientUsername'] = $msg['recipientUserName']
+                ?? $msg['recipient']
+                ?? '';
         }
-
-        $decoded['messages'] = is_array($decoded['messages'] ?? null)
-            ? array_values(array_filter($decoded['messages'], 'is_array'))
-            : [];
-
-        return $decoded;
+        if (!isset($msg['messageId']) && isset($msg['message_id'])) {
+            $msg['messageId'] = $msg['message_id'];
+        }
+        if (!isset($msg['createdDate']) && isset($msg['created_date'])) {
+            $msg['createdDate'] = $msg['created_date'];
+        }
+        return $msg;
     }
 
     /**
@@ -1436,15 +1510,73 @@ final class EbayChannelClient implements ChannelClientInterface
         $conversations = is_array($decoded['conversations'] ?? null)
             ? array_values(array_filter($decoded['conversations'], 'is_array'))
             : [];
+        foreach ($conversations as $i => $conv) {
+            if (!is_array($conv)) {
+                continue;
+            }
+            if (isset($conv['latestMessage']) && is_array($conv['latestMessage'])) {
+                $conversations[$i]['latestMessage'] = $this->normalizeConversationMessage(
+                    $conv['latestMessage']
+                );
+            }
+        }
+
+        $currentOffset = (int) ($decoded['offset'] ?? $offset);
+        $limitOut      = (int) ($decoded['limit']  ?? $limit);
+        $total         = (int) ($decoded['total']  ?? count($conversations));
+        $nextUri       = isset($decoded['next']) ? trim((string) $decoded['next']) : '';
+
+        // eBay returns `next` as a full URI. Sync expects a numeric offset token
+        // (same shape as Amazon). Passing the URI back made (int)$uri === 0 so
+        // every page re-fetched offset 0 and the conversation list never grew.
+        $nextOffset = $this->conversationNextOffset(
+            $nextUri,
+            $currentOffset,
+            $limitOut,
+            count($conversations),
+            $total,
+        );
 
         return [
             'conversations' => $conversations,
-            'limit'         => (int) ($decoded['limit']  ?? $limit),
-            'offset'        => (int) ($decoded['offset'] ?? $offset),
-            'total'         => (int) ($decoded['total']  ?? count($conversations)),
+            'limit'         => $limitOut,
+            'offset'        => $currentOffset,
+            'total'         => $total,
             'href'          => isset($decoded['href']) ? (string) $decoded['href'] : null,
-            'next'          => isset($decoded['next']) ? (string) $decoded['next'] : null,
+            'next'          => $nextOffset !== null ? (string) $nextOffset : null,
         ];
+    }
+
+    /**
+     * Resolve the next page offset from eBay's getConversations response.
+     */
+    private function conversationNextOffset(
+        string $nextUri,
+        int $currentOffset,
+        int $limit,
+        int $count,
+        int $total,
+    ): ?int {
+        unset($total);
+        if ($count <= 0 || $nextUri === '') {
+            // Only advance when eBay explicitly provides a next page URI.
+            return null;
+        }
+
+        $query = parse_url($nextUri, PHP_URL_QUERY);
+        if (is_string($query) && $query !== '') {
+            parse_str($query, $params);
+            if (isset($params['offset']) && is_numeric($params['offset'])) {
+                $parsed = (int) $params['offset'];
+                if ($parsed > $currentOffset) {
+                    return $parsed;
+                }
+            }
+        }
+
+        // Fallback if the next URI has no offset param.
+        $candidate = $currentOffset + max(1, $count > 0 ? $count : $limit);
+        return $candidate > $currentOffset ? $candidate : null;
     }
 
     /**

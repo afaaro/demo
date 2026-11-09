@@ -21,6 +21,6 @@
     "type": "text",
     "label": "Default registration group",
     "description": "Group name assigned to new public signups (must exist in Groups).",
-    "default": "users"
+    "default": "authenticated"
   }
 ]

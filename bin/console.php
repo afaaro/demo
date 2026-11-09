@@ -16,7 +16,8 @@ if (!defined('BASEDIR')) {
         fwrite(STDERR, "Unable to determine application root.\n");
         exit(1);
     }
-    define('BASEDIR', rtrim($root, '/\\') . DS);
+    // getRootDirectory() returns the path to config.php; app root is its dirname.
+    define('BASEDIR', rtrim(str_replace('\\', '/', dirname($root)), '/') . '/');
 }
 
 require_once BASEDIR . 'system' . DS . 'engine' . DS . 'autoloader.php';

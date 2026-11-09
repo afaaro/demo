@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/helpers/functions.php';
 
 use Module\Media\Services\ChannelRepository;
 use Module\Media\Services\MediaStorage;
+use Module\Media\Services\MediaTranscoder;
 use Module\Media\Services\VideoRepository;
 use System\Engine\Controller;
 
@@ -104,11 +105,20 @@ class MediaUpload extends Controller
         if ($this->storage->countChunks($uuid) === $totalChunks) {
             try {
                 $assembled = $this->storage->assembleChunks($uuid, $fileName, $totalChunks);
+                $transcoded = false;
+                if (($assembled['media_type'] ?? '') === 'video') {
+                    $transcoder = new MediaTranscoder();
+                    if ($transcoder->isEnabled()) {
+                        $assembled = $transcoder->maybeTranscodeVideo($assembled);
+                        $transcoded = !empty($assembled['transcoded']);
+                    }
+                }
                 echo json_encode([
-                    'success'    => true,
-                    'completed'  => true,
-                    'filepath'   => $assembled['relative'],
-                    'media_type' => $assembled['media_type'],
+                    'success'     => true,
+                    'completed'   => true,
+                    'filepath'    => $assembled['relative'],
+                    'media_type'  => $assembled['media_type'],
+                    'transcoded'  => $transcoded,
                 ]);
             } catch (\Throwable $e) {
                 echo json_encode(['error' => $e->getMessage()]);

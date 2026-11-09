@@ -269,6 +269,81 @@ class ToolsAdminDatabase extends Controller
     }
 
     // =========================================================================
+    // Drop — POST /tools/admin/database/drop
+    // =========================================================================
+
+    public function dropAction(): void
+    {
+        if (!$this->request->isPost()) {
+            throw new RuntimeException('Method not allowed');
+        }
+        $this->guardCsrf();
+
+        $tables = $this->postedTables();
+        if ($tables === []) {
+            $this->notify->error('Select at least one table to drop.');
+            redirect_to('tools/admin/database');
+            return;
+        }
+
+        $ok = 0;
+        $errors = [];
+        $pdo = $this->db->pdo();
+
+        try {
+            // DDL via exec — native prepared statements can silently no-op DROP.
+            $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+            foreach ($tables as $table) {
+                $quoted = $this->db->quoteIdentifier($table);
+                try {
+                    $pdo->exec("DROP TABLE IF EXISTS {$quoted}");
+                    if ($this->tableExists($table)) {
+                        // May be a view listed by SHOW TABLE STATUS.
+                        $pdo->exec("DROP VIEW IF EXISTS {$quoted}");
+                    }
+                    if ($this->tableExists($table)) {
+                        $errors[] = "{$table}: still exists after DROP";
+                        continue;
+                    }
+                    $ok++;
+                } catch (\Throwable $e) {
+                    $errors[] = "{$table}: " . $e->getMessage();
+                }
+            }
+        } finally {
+            try {
+                $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+            } catch (\Throwable) {
+                // ignore restore failure
+            }
+        }
+
+        $this->log->info('Database drop tables', [
+            'tables' => $tables,
+            'ok'     => $ok,
+            'errors' => $errors,
+            'by'     => $this->auth->id(),
+        ]);
+
+        if ($errors !== []) {
+            $this->notify->error(
+                "Dropped {$ok}/" . count($tables) . ' table(s). '
+                . implode(' · ', array_slice($errors, 0, 3))
+            );
+        } elseif ($ok === 0) {
+            $this->notify->error('No tables were dropped.');
+        } else {
+            $this->notify->success(
+                $ok === 1
+                    ? "Dropped table `{$tables[0]}`."
+                    : "Dropped {$ok} tables."
+            );
+        }
+
+        redirect_to('tools/admin/database');
+    }
+
+    // =========================================================================
     // Export — POST /tools/admin/database/export
     // =========================================================================
 
@@ -425,13 +500,21 @@ class ToolsAdminDatabase extends Controller
             return null;
         }
 
-        $exists = $this->db->query(
-            'SELECT COUNT(*) FROM information_schema.tables'
-            . ' WHERE table_schema = DATABASE() AND table_name = ?',
-            [$name]
-        )->value;
+        return $this->tableExists($name) ? $name : null;
+    }
 
-        return ((int) $exists) > 0 ? $name : null;
+    private function tableExists(string $name): bool
+    {
+        try {
+            $exists = $this->db->query(
+                'SELECT COUNT(*) FROM information_schema.tables'
+                . ' WHERE table_schema = DATABASE() AND table_name = ?',
+                [$name]
+            )->value;
+            return ((int) $exists) > 0;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /** @return list<string> */

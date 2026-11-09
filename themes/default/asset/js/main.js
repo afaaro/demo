@@ -80,4 +80,32 @@
             if (href === path) link.classList.add('is-active');
         } catch (_) {}
     });
+
+    /* ---------- Color theme toggle ---------- */
+    const themeRoot = document.documentElement;
+    const themeToggle = document.querySelector('[data-theme-toggle]');
+
+    const currentTheme = () => {
+        const attr = themeRoot.getAttribute('data-theme');
+        if (attr === 'dark' || attr === 'light') return attr;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    };
+
+    const applyTheme = (theme) => {
+        themeRoot.setAttribute('data-theme', theme);
+        try {
+            localStorage.setItem('site.theme', theme);
+        } catch (_) {}
+        if (themeToggle) {
+            themeToggle.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+        }
+    };
+
+    applyTheme(currentTheme());
+
+    if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+            applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+        });
+    }
 })();

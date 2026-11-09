@@ -1,0 +1,8 @@
+{
+    "name": "afaaro/livestream",
+    "description": "OBS SRT ingest via MediaMTX with HLS watch pages.",
+    "version": "1.0.0",
+    "extra": {
+        "label": "Livestream"
+    }
+}

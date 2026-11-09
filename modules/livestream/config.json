@@ -1,0 +1,106 @@
+[
+  {
+    "name": "enabled",
+    "type": "checkbox",
+    "label": "Enable livestream",
+    "description": "When off, public pages and MediaMTX webhooks are rejected.",
+    "default": true
+  },
+  {
+    "name": "mediamtx_api",
+    "type": "text",
+    "label": "MediaMTX control API",
+    "description": "Optional MediaMTX HTTP API base (not required for basic OBS → HLS).",
+    "default": "http://127.0.0.1:9997"
+  },
+  {
+    "name": "srt_publish_host",
+    "type": "text",
+    "label": "SRT publish host (public)",
+    "description": "DynDNS / public hostname for remote OBS.",
+    "default": "afaaro.myvnc.com"
+  },
+  {
+    "name": "srt_local_host",
+    "type": "text",
+    "label": "SRT local host",
+    "description": "Host for OBS on the same PC or LAN (usually 127.0.0.1).",
+    "default": "127.0.0.1"
+  },
+  {
+    "name": "srt_port",
+    "type": "number",
+    "label": "SRT port",
+    "description": "MediaMTX SRT listener port (OBS → MediaMTX).",
+    "default": 8890,
+    "min": 1,
+    "max": 65535,
+    "step": 1
+  },
+  {
+    "name": "rtmp_port",
+    "type": "number",
+    "label": "RTMP port",
+    "description": "MediaMTX RTMP listener for phone apps / OBS (forward TCP on the router).",
+    "default": 1935,
+    "min": 1,
+    "max": 65535,
+    "step": 1
+  },
+  {
+    "name": "hls_public_base",
+    "type": "text",
+    "label": "HLS public base",
+    "description": "Browser-facing HLS base URL with no trailing slash (e.g. http://afaaro.myvnc.com:8888).",
+    "default": "http://afaaro.myvnc.com:8888"
+  },
+  {
+    "name": "hls_proxy_upstream",
+    "type": "text",
+    "label": "HLS proxy upstream",
+    "description": "MediaMTX base the HTTPS site proxy fetches from (public DynDNS on soomaali.net; 127.0.0.1 on home WAMP).",
+    "default": "http://afaaro.myvnc.com:8888"
+  },
+  {
+    "name": "hls_cdn_secret",
+    "type": "text",
+    "label": "HLS CDN secret",
+    "description": "Must match MediaMTX hlsCDNSecret so the HTTPS proxy can fetch without session cookies.",
+    "default": "soomaali-hls-proxy-secret"
+  },
+  {
+    "name": "auth_upstream",
+    "type": "text",
+    "label": "Auth upstream",
+    "description": "Home MediaMTX only: forward publish auth to soomaali.net. Leave empty on soomaali.net.",
+    "default": "https://soomaali.net/livestream/webhook"
+  },
+  {
+    "name": "stats_upstream",
+    "type": "text",
+    "label": "Stats upstream",
+    "description": "soomaali.net studio Live feed: home telemetry URL when MediaMTX API is not local. Leave empty on home WAMP if API is reachable.",
+    "default": "http://afaaro.myvnc.com/demo/index.php?route=livestream/telemetry"
+  },
+  {
+    "name": "hls_transcode_h264",
+    "type": "checkbox",
+    "label": "Transcode to H.264 for website",
+    "description": "ffmpeg publishes {slug}_h264 (H.264+AAC) for soomaali.net; original path stays for VLC/HEVC.",
+    "default": true
+  },
+  {
+    "name": "transcode_key",
+    "type": "text",
+    "label": "Transcode publish key",
+    "description": "Password for ffmpeg user=transcode publishing to {slug}_h264 (must match on-online.bat).",
+    "default": "soomaali-hls-transcode"
+  },
+  {
+    "name": "webhook_secret",
+    "type": "text",
+    "label": "Webhook secret",
+    "description": "Shared secret for MediaMTX runOnReady / runOnNotReady hooks.",
+    "default": "change-me-livestream-webhook"
+  }
+]

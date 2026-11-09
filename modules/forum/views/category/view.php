@@ -43,7 +43,10 @@ foreach ($threads as $thread) {
         <?php
             $postHref = forum_new_url($categorySlug);
             if (!registry('auth')->check()) {
-                $postHref = $url->to('user/login', ['next' => $postHref]);
+                $next = $categorySlug !== ''
+                    ? 'forum/new/' . ltrim((string) $categorySlug, '/')
+                    : 'forum/new';
+                $postHref = $url->to('user/login', ['next' => $next]);
             }
         ?>
         <a class="xf-btn" href="<?= $view->e($postHref) ?>">Post thread</a>

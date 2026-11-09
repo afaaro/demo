@@ -136,6 +136,6 @@ $page      = $pager->page;
     <?php elseif ($isLocked): ?>
         <div class="xf-empty">This thread is closed.</div>
     <?php else: ?>
-        <div class="xf-empty"><a href="<?= $view->e($url->to('user/login', ['next' => $threadUrl])) ?>">Log in</a> to reply.</div>
+        <div class="xf-empty"><a href="<?= $view->e($url->to('user/login', ['next' => 'forum/thread/' . (int) $threadId])) ?>">Log in</a> to reply.</div>
     <?php endif; ?>
 </div>

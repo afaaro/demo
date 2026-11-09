@@ -21,7 +21,10 @@ $postSlug = $postSlug ?? '';
         <?php
             $postHref = forum_new_url($postSlug);
             if (!registry('auth')->check()) {
-                $postHref = $url->to('user/login', ['next' => $postHref]);
+                $next = $postSlug !== ''
+                    ? 'forum/new/' . ltrim((string) $postSlug, '/')
+                    : 'forum/new';
+                $postHref = $url->to('user/login', ['next' => $next]);
             }
         ?>
         <a class="xf-btn" href="<?= $view->e($postHref) ?>">

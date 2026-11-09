@@ -8,8 +8,8 @@ class UserAdminDashboard extends Controller
     protected function boot(): void
     {
         if (!$this->auth->check()) {
-            $this->session->set('redirect_after_login', $this->url->to('admin/dashboard'));
-            redirect('user/login');
+            $this->session->set('redirect_after_login', 'user/admin/dashboard');
+            redirect_to('user/login', ['next' => 'user/admin/dashboard']);
         }
         // Permissions: Action.php only (user.admin.dashboard.*).
     }

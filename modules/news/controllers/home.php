@@ -24,7 +24,7 @@ class NewsHome extends Controller
         $this->categories = new NewsCategoryRepository($this->db);
         $this->tags       = new NewsTagRepository($this->db);
         $this->news->publishDue();
-        $this->view->addThemeStyle('css/modules/news.css');
+        $this->view->addModuleStyle('news', 'news.css');
     }
 
     // =========================================================================
@@ -72,12 +72,6 @@ class NewsHome extends Controller
             $e = fn(string|int|float $s): string => $this->view->e((string) $s);
 
             echo '<div class="news">';
-            echo '<div class="news-head">';
-            echo '<h1>' . $e($title) . '</h1>';
-            echo '<div class="news-head__tools">';
-            echo $this->searchForm($q, $active, $activeTag);
-            echo '<a class="news-rss" href="' . $e($this->url->to('news/rss')) . '">RSS</a>';
-            echo '</div></div>';
             echo $this->categoryNav($cats, $active, $q, $activeTag);
 
             if ($items === []) {
@@ -307,7 +301,7 @@ class NewsHome extends Controller
                 if ($commentsPath !== null) {
                     require_once $commentsPath . '/helpers/functions.php';
                     echo comments_render('news', 'article', (string) (int) $item->id, [
-                        'login_query' => ['next' => 'news/view', 'slug' => $item->slug],
+                        'login_query' => ['next' => 'news/view/' . ltrim((string) $item->slug, '/')],
                     ]);
                 }
             }

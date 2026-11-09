@@ -1,5 +1,5 @@
-/* Shared admin page chrome. Module-only CSS goes in css/modules/{name}.css
-   and is added with $view->addStyle($view->asset('css/modules/{name}.css')). */
+/* Shared admin page chrome. Module-only CSS lives in modules/{name}/assets/
+   and is queued with $view->addModuleStyle('{name}', 'file.css'). */
 
 .sf-page { color: var(--admin-text, #1f2937); }
 

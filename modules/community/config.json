@@ -1,0 +1,33 @@
+[
+  {
+    "name": "posts_per_page",
+    "type": "number",
+    "label": "Posts per page",
+    "description": "Number of posts shown on the feed and profile wall.",
+    "default": 15,
+    "min": 5,
+    "max": 50,
+    "step": 1
+  },
+  {
+    "name": "max_photo_mb",
+    "type": "number",
+    "label": "Max photo size (MB)",
+    "description": "Maximum upload size for a post photo.",
+    "default": 5,
+    "min": 1,
+    "max": 20,
+    "step": 1
+  },
+  {
+    "name": "default_visibility",
+    "type": "select",
+    "label": "Default post visibility",
+    "description": "Visibility applied when composing a new post.",
+    "default": "friends",
+    "options": [
+      { "value": "friends", "label": "Friends only" },
+      { "value": "public", "label": "Public" }
+    ]
+  }
+]

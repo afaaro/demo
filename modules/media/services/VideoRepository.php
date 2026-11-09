@@ -209,18 +209,10 @@ final class VideoRepository
             return null;
         }
         $this->db->query(
-            'DELETE FROM `#__media_video_comments` WHERE `video_id` = ?',
+            "DELETE FROM `#__comments`
+              WHERE `module` = 'media' AND `entity_type` = 'video' AND `entity_id` = ?",
             [$videoId]
         );
-        try {
-            $this->db->query(
-                "DELETE FROM `#__comments`
-                  WHERE `module` = 'media' AND `entity_type` = 'video' AND `entity_id` = ?",
-                [$videoId]
-            );
-        } catch (\Throwable) {
-            // Shared comments table may not exist yet.
-        }
         $this->db->query(
             'DELETE FROM `#__media_video_reactions` WHERE `video_id` = ?',
             [$videoId]

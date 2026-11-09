@@ -1,0 +1,29 @@
+@echo off
+setlocal EnableExtensions
+REM Copy to C:\mediamtx\on-online.bat
+REM Do NOT use "timeout ... >nul" — MediaMTX stdin redirect breaks it.
+
+if not defined MTX_PATH exit /b 0
+
+set "LS_PATH=%MTX_PATH%"
+if /I "%LS_PATH:~-5%"=="_h264" goto :status_only
+
+curl.exe -sS "http://127.0.0.1/demo/index.php?route=livestream/webhook/status&event=ready&secret=change-me-livestream-webhook&path=%MTX_PATH%" >nul 2>&1
+curl.exe -sS "https://soomaali.net/livestream/webhook/status?event=ready&secret=change-me-livestream-webhook&path=%MTX_PATH%" >nul 2>&1
+
+ping 127.0.0.1 -n 3 >nul 2>&1
+
+"C:\ffmpeg\bin\ffmpeg.exe" -hide_banner -loglevel warning ^
+  -rtsp_transport tcp -i "rtsp://127.0.0.1:8554/%MTX_PATH%" ^
+  -map 0:v:0 -map 0:a:0? ^
+  -c:v libx264 -preset veryfast -tune zerolatency -profile:v main -pix_fmt yuv420p ^
+  -g 60 -keyint_min 60 -sc_threshold 0 ^
+  -c:a aac -ar 48000 -b:a 128k -ac 2 ^
+  -f mpegts "srt://127.0.0.1:8890?streamid=publish:%MTX_PATH%_h264:transcode:soomaali-hls-transcode"
+
+exit /b %ERRORLEVEL%
+
+:status_only
+curl.exe -sS "http://127.0.0.1/demo/index.php?route=livestream/webhook/status&event=ready&secret=change-me-livestream-webhook&path=%MTX_PATH%" >nul 2>&1
+curl.exe -sS "https://soomaali.net/livestream/webhook/status?event=ready&secret=change-me-livestream-webhook&path=%MTX_PATH%" >nul 2>&1
+exit /b 0

@@ -74,6 +74,9 @@ final class User
     private static ?User $current  = null;
     private static bool  $resolved = false;
 
+    /** Cached anonymous guest persona for the request. */
+    private static ?User $guest = null;
+
     public static function setContext(Database $db, Session $session): void
     {
         self::$db      = $db;
@@ -86,9 +89,34 @@ final class User
         $session = $registry->get('session');
         UserGroup::setContext($db);
         self::setContext($db, $session);
-        $current = static fn(): self => self::current() ?? new self();
+        $current = static fn(): self => self::current() ?? self::guest();
         $registry->factory('user', $current);
         $registry->factory('auth', $current);
+    }
+
+    /**
+     * Synthetic anonymous user carrying the system `guest` group permissions.
+     * Always has id === null so check()/current() still mean "logged in".
+     */
+    public static function guest(): self
+    {
+        if (self::$guest !== null) {
+            return self::$guest;
+        }
+
+        $user = new self();
+        $user->id = null;
+        try {
+            $group = UserGroup::findByName('guest');
+            if ($group !== null) {
+                $user->groups = [$group];
+                $user->permissions = self::flattenPermissions([$group], []);
+            }
+        } catch (Throwable) {
+            // Guest group missing until migrate.
+        }
+
+        return self::$guest = $user;
     }
 
     private static function db(): Database
@@ -230,20 +258,37 @@ final class User
         return $this->inGroupId($required);
     }
 
-    /** Admin toolbar / staff UI: any module permission or *. */
+    /**
+     * Admin toolbar / staff UI gate.
+     * Requires *, module.view, module.*, or an explicit *.admin permission —
+     * not arbitrary front-end perms like community.home.index / news.home.index.
+     */
     public function canAccessAdminUi(): bool
     {
         if ($this->can('*')) {
             return true;
         }
         if (!function_exists('get_modules')) {
-            return $this->permissions !== [];
+            return false;
         }
+
         foreach (array_keys(get_modules()) as $module) {
-            if ($this->canModule((string) $module)) {
+            $module = strtolower(trim((string) $module));
+            $module = preg_replace('/[^a-z0-9_]/', '', $module) ?? '';
+            if ($module === '') {
+                continue;
+            }
+            if ($this->can($module . '.*') || $this->can($module . '.view') || $this->can($module . '.admin')) {
                 return true;
             }
+            foreach ($this->permissions as $perm) {
+                $perm = (string) $perm;
+                if ($perm === $module . '.admin' || str_starts_with($perm, $module . '.admin.')) {
+                    return true;
+                }
+            }
         }
+
         return false;
     }
 
@@ -340,13 +385,15 @@ final class User
         if ($sessionRev === null) {
             self::session()->set(self::SESSION_AUTH_REVISION, $user->authRevision);
         } elseif ((int) $sessionRev !== $user->authRevision) {
-            $forceLogout = true;
+            // Default: stay signed in and pick up the new privileges.
+            // Set user.force_logout_on_privilege_change = true to kick other sessions instead.
+            $forceLogout = false;
             try {
                 $forceLogout = (bool) Registry::getInstance()
                     ->get('config')
-                    ->get('user.force_logout_on_privilege_change', true);
+                    ->get('user.force_logout_on_privilege_change', false);
             } catch (Throwable) {
-                $forceLogout = true;
+                $forceLogout = false;
             }
             if ($forceLogout) {
                 self::logout();
@@ -459,6 +506,9 @@ final class User
                 if ($g->id === null || $g->level < 0) {
                     continue;
                 }
+                if (strcasecmp($g->name, 'guest') === 0) {
+                    continue;
+                }
                 $label = $g->label !== '' ? $g->label : $g->name;
                 $out[] = ['value' => (int) $g->id, 'label' => $label . ' (group)'];
             }
@@ -481,6 +531,8 @@ final class User
         } catch (Throwable) {
             // Column may not exist until migrate.
         }
+        // Keep the acting admin signed in when they bump their own revision.
+        self::syncSessionAuthRevision();
     }
 
     public static function bumpAuthRevisionForGroup(int $groupId): void
@@ -499,6 +551,36 @@ final class User
         } catch (Throwable) {
             // Column may not exist until migrate.
         }
+        // Group edits bump every member — including the admin saving the form.
+        // Align this session so they are not force-logged-out on redirect.
+        self::syncSessionAuthRevision();
+    }
+
+    /**
+     * Point the current session at the DB auth_revision for the logged-in user.
+     * Other sessions still see a mismatch and log out (privilege-change security).
+     */
+    public static function syncSessionAuthRevision(): void
+    {
+        $rawId = self::session()->get('user_id');
+        $id    = is_numeric($rawId) ? (int) $rawId : 0;
+        if ($id <= 0) {
+            return;
+        }
+        try {
+            $row = self::db()->query(
+                'SELECT `auth_revision` FROM `#__users` WHERE `id` = ? LIMIT 1',
+                [$id]
+            )->row;
+        } catch (Throwable) {
+            return;
+        }
+        if ($row === []) {
+            return;
+        }
+        self::session()->set(self::SESSION_AUTH_REVISION, (int) ($row['auth_revision'] ?? 1));
+        self::$current  = null;
+        self::$resolved = false;
     }
 
     /** Staff UI gate — see instance canAccessAdminUi(). */
@@ -514,12 +596,12 @@ final class User
 
     public static function canCurrent(string $permission): bool
     {
-        return self::current()?->can($permission) ?? false;
+        return (self::current() ?? self::guest())->can($permission);
     }
 
     public static function canModuleCurrent(string $module): bool
     {
-        return self::current()?->canModule($module) ?? false;
+        return (self::current() ?? self::guest())->canModule($module);
     }
 
     /** @param array<int, string> $permissions */

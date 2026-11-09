@@ -171,14 +171,8 @@ final class MigrateCommand
         $this->ensureMigrationsTable($db);
 
         $applied = $this->appliedMigrations($db);
-        $all     = $this->discoverMigrations();
-
-        $prefix    = $moduleName . ':';
-        $moduleMs  = array_filter(
-            $all,
-            fn($key) => str_starts_with($key, $prefix),
-            ARRAY_FILTER_USE_KEY
-        );
+        // Always discover this module's files (needed during install).
+        $moduleMs = $this->discoverMigrations(false, $moduleName);
 
         $pending = array_diff_key($moduleMs, array_flip($applied));
 
@@ -221,15 +215,8 @@ final class MigrateCommand
         $db = $this->registry->get('db');
         $this->ensureMigrationsTable($db);
 
-        $applied = $this->appliedMigrations($db);
-        $all     = $this->discoverMigrations();
-        $prefix  = $moduleName . ':';
-
-        $moduleMs = array_filter(
-            $all,
-            static fn($key) => str_starts_with($key, $prefix),
-            ARRAY_FILTER_USE_KEY
-        );
+        $applied  = $this->appliedMigrations($db);
+        $moduleMs = $this->discoverMigrations(false, $moduleName);
 
         $pending = array_diff_key($moduleMs, array_flip($applied));
         $pendingKeys = array_keys($pending);
@@ -293,7 +280,7 @@ final class MigrateCommand
             return;
         }
 
-        $all = $this->discoverMigrations();
+        $all = $this->discoverMigrations(false, $moduleName);
 
         foreach ($rows as $row) {
             $key = (string) $row['migration'];
@@ -364,18 +351,24 @@ final class MigrateCommand
      * Discover all migrations from:
      *   1. storage/migrations/*.php                          (core)
      *   2. system/modules/{name}/migrations/*.php            (system modules)
-     *   3. modules/{name}/migrations/*.php                   (user modules)
+     *   3. modules/{name}/migrations/*.php                   (installed user modules)
      *
      * Returns [migrationKey => absoluteFilePath].
      * Module migrations are keyed as "{module}:{filename}" to avoid collisions.
      *
+     * @param bool $installedModulesOnly When true (default), skip user modules
+     *                                   that are not registered in #__modules.
+     *                                   System modules are always included.
+     * @param string|null $onlyModule    Limit discovery to one module name.
      * @return array<string, string>
      */
-    private function discoverMigrations(): array
-    {
+    private function discoverMigrations(
+        bool $installedModulesOnly = true,
+        ?string $onlyModule = null,
+    ): array {
         $out = array_merge(
-            $this->discoverCoreMigrations(),
-            $this->discoverModuleMigrations(),
+            $onlyModule === null ? $this->discoverCoreMigrations() : [],
+            $this->discoverModuleMigrations($installedModulesOnly, $onlyModule),
         );
 
         ksort($out);
@@ -399,11 +392,22 @@ final class MigrateCommand
     }
 
     /** @return array<string, string> */
-    private function discoverModuleMigrations(): array
-    {
+    private function discoverModuleMigrations(
+        bool $installedModulesOnly = true,
+        ?string $onlyModule = null,
+    ): array {
         $out = [];
+        $installed = $installedModulesOnly ? $this->installedModuleNames() : null;
 
-        foreach (get_modules() as $moduleName => $modulePath) {
+        foreach (get_modules($onlyModule) as $moduleName => $modulePath) {
+            if ($onlyModule !== null && strcasecmp($moduleName, $onlyModule) !== 0) {
+                continue;
+            }
+
+            if ($installed !== null && !$this->includeModuleMigrations($moduleName, $modulePath, $installed)) {
+                continue;
+            }
+
             $dir = rtrim($modulePath, '/\\') . DIRECTORY_SEPARATOR . 'migrations';
 
             if (!is_dir($dir)) {
@@ -417,6 +421,48 @@ final class MigrateCommand
         }
 
         return $out;
+    }
+
+    /**
+     * System modules always participate. User modules only when installed.
+     *
+     * @param array<string, true> $installed
+     */
+    private function includeModuleMigrations(string $moduleName, string $modulePath, array $installed): bool
+    {
+        $normalized = str_replace('\\', '/', $modulePath);
+        if (str_contains($normalized, '/system/modules/')) {
+            return true;
+        }
+
+        return isset($installed[strtolower($moduleName)]);
+    }
+
+    /** @return array<string, true> lowercase module name => true */
+    private function installedModuleNames(): array
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+
+        $cache = [];
+        try {
+            $db = $this->registry->get('db');
+            $rows = $db->query(
+                'SELECT `name` FROM `' . $db->getPrefix() . 'modules`'
+            )->rows;
+            foreach ($rows as $row) {
+                $name = strtolower(trim((string) ($row['name'] ?? '')));
+                if ($name !== '') {
+                    $cache[$name] = true;
+                }
+            }
+        } catch (\Throwable) {
+            // modules table may be unavailable during early bootstrap
+        }
+
+        return $cache;
     }
 
     private function nextBatch(Database $db): int

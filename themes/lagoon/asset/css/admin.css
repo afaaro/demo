@@ -1,0 +1,756 @@
+/* =========================================================
+   Admin shell — modern, responsive, accessible
+   ========================================================= */
+
+:root {
+    --admin-sidebar-w: 248px;
+    --admin-sidebar-w-collapsed: 68px;
+    --admin-sidebar-bg: #111827;
+    --admin-sidebar-bg-2: #1f2937;
+    --admin-sidebar-fg: #cbd5e1;
+    --admin-sidebar-fg-muted: #94a3b8;
+    --admin-sidebar-fg-strong: #ffffff;
+    --admin-sidebar-hover: rgba(255, 255, 255, 0.06);
+    --admin-sidebar-border: rgba(255, 255, 255, 0.08);
+    --admin-accent: #558cb7;
+    --admin-accent-soft: rgba(85, 140, 183, 0.22);
+    --admin-topbar-h: 56px;
+    --admin-radius: 12px;
+    --admin-radius-sm: 8px;
+    --admin-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+    --admin-canvas: #f3f4f6;
+    --admin-line: #e5e7eb;
+    --admin-text: #1f2937;
+    --admin-muted: #6b7280;
+}
+
+.admin-body {
+    background: var(--admin-canvas);
+    color: var(--admin-text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.admin-shell {
+    display: flex;
+    min-height: 100vh;
+    position: relative;
+}
+
+/* =========================================================
+   Sidebar
+   ========================================================= */
+
+.admin-sidebar {
+    width: var(--admin-sidebar-w);
+    flex-shrink: 0;
+    background: linear-gradient(180deg, var(--admin-sidebar-bg-2), var(--admin-sidebar-bg));
+    color: var(--admin-sidebar-fg);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: hidden auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+    transition: width var(--admin-transition);
+    z-index: 1040;
+}
+
+.admin-sidebar::-webkit-scrollbar { width: 6px; }
+.admin-sidebar::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.12);
+    border-radius: 3px;
+}
+
+/* Brand */
+.admin-sidebar__brand {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .9rem 1rem;
+    border-bottom: 1px solid var(--admin-sidebar-border);
+    min-height: var(--admin-topbar-h);
+}
+
+.admin-brand {
+    display: flex;
+    align-items: center;
+    gap: .625rem;
+    color: var(--admin-sidebar-fg-strong);
+    text-decoration: none;
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-brand__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--admin-accent);
+    color: #fff;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.admin-brand__text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: .95rem;
+}
+
+.admin-sidebar__collapse {
+    background: transparent;
+    border: 0;
+    color: var(--admin-sidebar-fg-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background var(--admin-transition), color var(--admin-transition);
+}
+
+.admin-sidebar__collapse:hover {
+    background: var(--admin-sidebar-hover);
+    color: #fff;
+}
+
+.admin-topbar .admin-sidebar__collapse {
+    color: var(--admin-muted);
+}
+
+.admin-topbar .admin-sidebar__collapse:hover {
+    background: #f3f4f6;
+    color: #111827;
+}
+
+/* Nav container */
+.admin-sidebar__nav {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    padding: .75rem .625rem;
+    gap: 2px;
+}
+
+.admin-sidebar__footer {
+    margin-top: auto;
+    padding-top: .5rem;
+    border-top: 1px solid var(--admin-sidebar-border);
+}
+
+/* =========================================================
+   Nav links
+   ========================================================= */
+
+.admin-nav-link {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: .625rem;
+    padding: .55rem .75rem;
+    border-radius: var(--admin-radius-sm);
+    color: var(--admin-sidebar-fg);
+    text-decoration: none;
+    font-size: .875rem;
+    line-height: 1.25rem;
+    transition: background var(--admin-transition), color var(--admin-transition);
+    white-space: nowrap;
+}
+
+.admin-nav-link:hover {
+    background: var(--admin-sidebar-hover);
+    color: var(--admin-sidebar-fg-strong);
+}
+
+.admin-nav-link:focus-visible {
+    outline: 2px solid var(--admin-accent);
+    outline-offset: 2px;
+}
+
+.admin-nav-link.is-active,
+.admin-nav-link.active {
+    background: var(--admin-accent-soft);
+    color: #fff;
+    font-weight: 500;
+}
+
+.admin-nav-link.is-active::before,
+.admin-nav-link.active::before {
+    content: "";
+    position: absolute;
+    left: -0.625rem;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--admin-accent);
+}
+
+.admin-nav-link i:first-child {
+    font-size: 1.05rem;
+    width: 1.35rem;
+    text-align: center;
+    flex-shrink: 0;
+    color: inherit;
+    opacity: .9;
+}
+
+/* =========================================================
+   Groups / sections / submenus
+   ========================================================= */
+
+.admin-nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.admin-nav-group + .admin-nav-group {
+    margin-top: .375rem;
+    padding-top: .375rem;
+    border-top: 1px dashed var(--admin-sidebar-border);
+}
+
+.admin-nav-group__toggle {
+    background: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    padding: .55rem .75rem .3rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    color: var(--admin-sidebar-fg-muted);
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-family: inherit;
+    border-radius: var(--admin-radius-sm);
+    transition: color var(--admin-transition), background var(--admin-transition);
+}
+
+.admin-nav-group__toggle:hover {
+    color: var(--admin-sidebar-fg);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.admin-nav-group__label {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .55rem .75rem .3rem;
+    color: var(--admin-sidebar-fg-muted);
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+
+.admin-nav-group__label i {
+    font-size: .9rem;
+    width: 1.35rem;
+}
+
+.admin-nav-group__body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-top: .125rem;
+}
+
+.admin-nav-section-label {
+    padding: .75rem .75rem .25rem;
+    margin-top: .5rem;
+    border-top: 1px solid var(--admin-sidebar-border);
+    color: var(--admin-sidebar-fg-muted);
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+}
+
+.admin-nav-header {
+    padding: .5rem .75rem .25rem;
+    color: var(--admin-sidebar-fg-muted);
+    font-size: .65rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+
+.admin-nav-divider {
+    margin: .5rem .75rem;
+    border-color: var(--admin-sidebar-border);
+    opacity: 1;
+}
+
+/* Collapsible submenus */
+.admin-nav-toggle {
+    background: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+}
+
+.admin-nav-caret {
+    font-size: .75rem;
+    margin-left: auto;
+    transition: transform var(--admin-transition);
+}
+
+.admin-nav-toggle[aria-expanded="true"] .admin-nav-caret,
+.admin-nav-group__toggle[aria-expanded="true"] .admin-nav-caret {
+    transform: rotate(180deg);
+}
+
+.admin-nav-submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-left: .75rem;
+    margin-left: 1.1rem;
+    border-left: 1px solid var(--admin-sidebar-border);
+}
+
+.admin-nav-submenu .admin-nav-link {
+    font-size: .825rem;
+    padding: .45rem .75rem;
+}
+
+.admin-nav-submenu .admin-nav-link i:first-child {
+    font-size: .9rem;
+    width: 1.1rem;
+}
+
+/* =========================================================
+   Content area
+   ========================================================= */
+
+.admin-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.admin-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 1030;
+    height: var(--admin-topbar-h);
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: 0 1.25rem;
+    background: #fff;
+    border-bottom: 1px solid var(--admin-line);
+}
+
+.admin-topbar__toggle {
+    background: transparent;
+    border: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--admin-radius-sm);
+    font-size: 1.25rem;
+    color: #374151;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.admin-topbar__toggle:hover {
+    background: #f3f4f6;
+}
+
+.admin-topbar__title {
+    font-size: 1.05rem;
+    font-weight: 650;
+    margin: 0;
+    color: #111827;
+    letter-spacing: -.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.admin-topbar__actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+}
+
+.admin-user {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    min-width: 0;
+}
+
+.admin-user__avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: .75rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.admin-user__name {
+    font-size: .82rem;
+    font-weight: 600;
+    color: #374151;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.admin-main {
+    flex: 1;
+    min-width: 0;
+    padding: 1.15rem 1.25rem 1.5rem;
+    background: var(--admin-canvas);
+}
+
+.admin-main__inner {
+    background: #fff;
+    border: 1px solid var(--admin-line);
+    border-radius: var(--admin-radius);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    padding: 1.25rem 1.35rem;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+body.admin-body:has(.sf-orders-page) .admin-main__inner,
+body.admin-body:has(.sf-im-page) .admin-main__inner,
+body.admin-body:has(.sf-dash) .admin-main__inner,
+body.admin-body:has(.sf-cust-page) .admin-main__inner,
+body.admin-body:has(.sf-pick) .admin-main__inner,
+body.admin-body:has(.sf-conv) .admin-main__inner,
+body.admin-body:has(.sf-msg) .admin-main__inner,
+body.admin-body:has(.sf-page) .admin-main__inner,
+body.admin-body:has(.sf-pm) .admin-main__inner {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+}
+
+/* =========================================================
+   Collapsed (desktop icon-only) mode
+   ========================================================= */
+
+.admin-shell.is-collapsed .admin-sidebar {
+    width: var(--admin-sidebar-w-collapsed);
+}
+
+.admin-shell.is-collapsed .admin-brand__text,
+.admin-shell.is-collapsed .admin-nav-link span,
+.admin-shell.is-collapsed .admin-nav-group__label span,
+.admin-shell.is-collapsed .admin-nav-group__toggle span,
+.admin-shell.is-collapsed .admin-nav-caret,
+.admin-shell.is-collapsed .admin-nav-section-label,
+.admin-shell.is-collapsed .admin-nav-header {
+    display: none;
+}
+
+.admin-shell.is-collapsed .admin-brand {
+    justify-content: center;
+}
+
+.admin-shell.is-collapsed .admin-sidebar__brand {
+    flex-direction: column;
+    justify-content: center;
+    gap: .35rem;
+    padding: .75rem .5rem;
+}
+
+/* Keep expand control visible — hiding it trapped users in collapsed mode. */
+.admin-shell.is-collapsed .admin-sidebar__collapse {
+    display: inline-flex;
+}
+
+.admin-shell.is-collapsed .admin-nav-link {
+    justify-content: center;
+    padding: .6rem .5rem;
+}
+
+.admin-shell.is-collapsed .admin-nav-link i:first-child {
+    width: auto;
+}
+
+.admin-shell.is-collapsed .admin-nav-submenu {
+    display: none;
+}
+
+.admin-shell.is-collapsed .admin-nav-link.is-active::before,
+.admin-shell.is-collapsed .admin-nav-link.active::before {
+    left: -0.625rem;
+}
+
+/* Tooltip on hover in collapsed mode (fine pointers only — sticky hover on touch). */
+.admin-shell.is-collapsed .admin-nav-link {
+    position: relative;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .admin-shell.is-collapsed .admin-nav-link:hover::after,
+    .admin-shell.is-collapsed .admin-nav-link:focus-visible::after {
+        content: attr(data-label);
+        position: absolute;
+        left: calc(100% + 8px);
+        top: 50%;
+        transform: translateY(-50%);
+        background: #111827;
+        color: #fff;
+        padding: .375rem .625rem;
+        border-radius: 6px;
+        font-size: .78rem;
+        white-space: nowrap;
+        z-index: 1100;
+        pointer-events: none;
+        box-shadow: 0 6px 16px rgba(0,0,0,.2);
+    }
+}
+
+/* =========================================================
+   Mobile
+   ========================================================= */
+
+.admin-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 1035;
+    opacity: 0;
+    transition: opacity var(--admin-transition);
+}
+
+.admin-backdrop.is-visible {
+    opacity: 1;
+}
+
+@media (max-width: 991.98px) {
+    .admin-sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        height: 100dvh;
+        width: min(280px, 86vw);
+        max-width: 280px;
+        transform: translateX(-100%);
+        transition: transform var(--admin-transition);
+        box-shadow: 0 0 40px rgba(0,0,0,.35);
+        z-index: 1040; /* above backdrop (1035) */
+        /* Don't inherit sticky desktop height quirks when drawer is closed */
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .admin-shell.is-mobile-open .admin-sidebar {
+        transform: translateX(0);
+    }
+
+    /* Drawer must not stay in desktop collapsed/icon mode on phones */
+    .admin-shell.is-collapsed .admin-sidebar {
+        width: min(280px, 86vw);
+    }
+
+    .admin-shell.is-collapsed .admin-brand__text,
+    .admin-shell.is-collapsed .admin-nav-link span,
+    .admin-shell.is-collapsed .admin-nav-group__label span,
+    .admin-shell.is-collapsed .admin-nav-group__toggle span,
+    .admin-shell.is-collapsed .admin-nav-caret,
+    .admin-shell.is-collapsed .admin-nav-section-label,
+    .admin-shell.is-collapsed .admin-nav-header {
+        display: revert;
+    }
+
+    .admin-shell.is-collapsed .admin-nav-link {
+        justify-content: flex-start;
+        padding: .55rem .75rem;
+    }
+
+    .admin-shell.is-collapsed .admin-nav-submenu {
+        display: flex;
+    }
+
+    .admin-shell.is-collapsed .admin-sidebar__brand {
+        flex-direction: row;
+        justify-content: flex-start;
+        padding: .9rem 1rem;
+    }
+
+    .admin-sidebar__collapse { display: none !important; }
+
+    .admin-main { padding: 1rem; }
+    .admin-main__inner { padding: 1rem 1.1rem; }
+    .admin-topbar { padding: 0 .75rem; }
+    .admin-user__name { display: none; }
+}
+
+/* =========================================================
+   Content chrome — tables, cards, forms, buttons
+   ========================================================= */
+
+.admin-main h1.h3,
+.admin-main .h3 {
+    font-size: 1.35rem;
+    font-weight: 650;
+    letter-spacing: -.02em;
+    color: #111827;
+}
+
+.admin-main .card {
+    border: 1px solid var(--admin-line);
+    border-radius: .7rem;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    background: #fff;
+}
+
+.admin-main .card-header {
+    background: #fff;
+    border-bottom: 1px solid #eef0f3;
+    font-weight: 650;
+    color: #111827;
+}
+
+.admin-main .table {
+    --bs-table-bg: transparent;
+    margin-bottom: 0;
+}
+
+.admin-main .table thead th {
+    background: #6e7f9f;
+    color: #fff;
+    font-weight: 500;
+    font-size: .72rem;
+    letter-spacing: .02em;
+    border: 0;
+    white-space: nowrap;
+    padding: .65rem .75rem;
+    vertical-align: middle;
+}
+
+.admin-main .table tbody td {
+    border-color: #f1f5f9;
+    padding: .7rem .75rem;
+    font-size: .84rem;
+    vertical-align: middle;
+    color: var(--admin-text);
+}
+
+.admin-main .table tbody tr:hover {
+    background: #f8fafc;
+}
+
+.admin-main .form-control,
+.admin-main .form-select {
+    border-color: #d1d5db;
+    border-radius: .45rem;
+    font-size: .875rem;
+    min-height: 2.25rem;
+}
+
+.admin-main .form-control:focus,
+.admin-main .form-select:focus {
+    border-color: var(--admin-accent);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.admin-main .form-label,
+.admin-main .form-text {
+    color: #374151;
+}
+
+.admin-main .form-text {
+    color: var(--admin-muted);
+}
+
+.admin-main .btn {
+    font-weight: 600;
+    border-radius: .45rem;
+}
+
+.admin-main .btn-primary {
+    background: var(--admin-accent);
+    border-color: var(--admin-accent);
+}
+
+.admin-main .btn-primary:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+
+.admin-main .btn-success {
+    background: #16a34a;
+    border-color: #16a34a;
+}
+
+.admin-main .btn-success:hover {
+    background: #15803d;
+    border-color: #15803d;
+}
+
+.admin-main .btn-outline-secondary,
+.admin-main .btn-outline-primary,
+.admin-main .btn-outline-danger,
+.admin-main .btn-outline-success {
+    background: #fff;
+}
+
+.admin-main .badge {
+    font-weight: 700;
+    letter-spacing: .01em;
+}
+
+.admin-main .alert {
+    border-radius: .6rem;
+    border: 1px solid transparent;
+}
+
+.admin-main .notifications .alert {
+    margin-bottom: .75rem;
+}
+
+.admin-main .pagination {
+    --bs-pagination-border-radius: .4rem;
+    --bs-pagination-color: #374151;
+    --bs-pagination-active-bg: #111827;
+    --bs-pagination-active-border-color: #111827;
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+    .admin-sidebar,
+    .admin-nav-link,
+    .admin-nav-caret,
+    .admin-backdrop,
+    .admin-sidebar__collapse {
+        transition: none !important;
+    }
+}

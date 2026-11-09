@@ -187,27 +187,27 @@ final class PermissionCatalog
             }
 
             $relative = preg_replace('/\.php$/', '', substr($abs, strlen($controllersDir))) ?? '';
-            $spaced = str_replace(['_', '-', '/'], ' ', $module . '/' . $relative);
-            $className = str_replace(' ', '', ucwords($spaced));
-            $className = preg_replace('/[^A-Za-z0-9_]/', '', $className) ?? '';
-            if ($className === '') {
-                continue;
-            }
-
-            if (!class_exists($className, false)) {
-                require_once $file->getPathname();
-            }
-            if (!class_exists($className)) {
-                continue;
-            }
-
             $controllerKey = strtolower(str_replace('/', '.', $relative));
-            $reflection = new \ReflectionClass($className);
-            foreach ($reflection->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
-                if (!str_ends_with($method->name, 'Action')) {
-                    continue;
-                }
-                $action = strtolower(substr($method->name, 0, -6));
+            if ($controllerKey === '') {
+                continue;
+            }
+
+            // Parse *Action methods from source — do not require_once controllers
+            // (missing imports / side effects would break the groups editor).
+            $src = @file_get_contents($file->getPathname());
+            if ($src === false || $src === '') {
+                continue;
+            }
+            if (!preg_match_all(
+                '/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)Action\s*\(/',
+                $src,
+                $matches
+            )) {
+                continue;
+            }
+
+            foreach ($matches[1] as $actionBase) {
+                $action = strtolower((string) $actionBase);
                 if ($action === '') {
                     continue;
                 }

@@ -1038,7 +1038,7 @@ return [
     ],
 
     // =========================================================================
-    // Messages (Conversations-first; Mail is secondary)
+    // Messages (Conversations)
     // =========================================================================
     'store/admin/messages' => [
         'controller' => 'store/admin/messages',
@@ -1046,6 +1046,7 @@ return [
         'auth'       => true,
         'methods'    => ['GET'],
     ],
+    // Legacy GetMyMessages routes — redirect to conversations.
     'store/admin/messages/mail' => [
         'controller' => 'store/admin/messages',
         'action'     => 'mail',

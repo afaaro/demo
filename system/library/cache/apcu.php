@@ -47,6 +47,22 @@ class Apcu
         apcu_delete($this->prefix . $key);
     }
 
+    public function increment(string $key, int $ttl = 60): int
+    {
+        if (!$this->active) {
+            return 1;
+        }
+
+        $full = $this->prefix . $key;
+        $success = false;
+        $value = apcu_inc($full, 1, $success);
+        if (!$success) {
+            apcu_store($full, 1, max(1, $ttl));
+            return 1;
+        }
+        return (int) $value;
+    }
+
     public function flush(): bool
     {
         if (!$this->active || !function_exists('apcu_clear_cache')) {

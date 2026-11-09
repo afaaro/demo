@@ -98,6 +98,9 @@ class File
             );
         }
 
+        // Replace prior versions of this key so the cache dir does not accumulate files.
+        $this->delete($key);
+
         $file = $this->dir . 'cache.' . $this->safeKey($key) . '.' . (time() + $expire);
         $tmp  = $file . '.tmp.' . bin2hex(random_bytes(6));
 
@@ -109,6 +112,29 @@ class File
         if (!@rename($tmp, $file)) {
             @unlink($tmp);
             throw new \RuntimeException("Failed to move cache file into place: {$file}");
+        }
+    }
+
+    public function increment(string $key, int $ttl = 60): int
+    {
+        $lockPath = $this->dir . 'lock.' . $this->safeKey($key);
+        $fh = @fopen($lockPath, 'c+');
+        if ($fh === false) {
+            $current = (int) ($this->get($key) ?? 0);
+            $next = $current + 1;
+            $this->set($key, $next, max(1, $ttl));
+            return $next;
+        }
+
+        try {
+            flock($fh, LOCK_EX);
+            $current = (int) ($this->get($key) ?? 0);
+            $next = $current + 1;
+            $this->set($key, $next, max(1, $ttl));
+            return $next;
+        } finally {
+            flock($fh, LOCK_UN);
+            fclose($fh);
         }
     }
 

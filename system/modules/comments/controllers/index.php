@@ -14,13 +14,16 @@ class CommentsIndex extends Controller
         $module = trim((string) $this->request->get('module', 'string', ''));
         $rows = $repo->recent(40, $module !== '' ? $module : null);
 
+        $viewerId = (int) ($this->auth->id() ?? 0);
         $items = [];
         foreach ($rows as $row) {
-            $entity = $repo->resolveEntity(
-                (string) $row['module'],
-                (string) $row['entity_type'],
-                (string) $row['entity_id'],
-            );
+            $mod = (string) $row['module'];
+            $etype = (string) $row['entity_type'];
+            $eid = (string) $row['entity_id'];
+            if (!$repo->viewerCanAccess($mod, $etype, $eid, $viewerId > 0 ? $viewerId : null)) {
+                continue;
+            }
+            $entity = $repo->resolveEntity($mod, $etype, $eid);
             $snippet = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $row['body'])) ?? '');
             if (mb_strlen($snippet) > 220) {
                 $snippet = mb_substr($snippet, 0, 219) . '…';
@@ -30,7 +33,7 @@ class CommentsIndex extends Controller
                 'username' => (string) ($row['username'] ?? 'User'),
                 'body'     => $snippet,
                 'when'     => comments_relative_time($row['created_at'] ?? null),
-                'module'   => (string) $row['module'],
+                'module'   => $mod,
                 'title'    => $entity['title'],
                 'url'      => $entity['url'],
             ];
