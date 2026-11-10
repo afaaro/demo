@@ -1420,12 +1420,14 @@ CSS;
             $items = array_merge($items, [
                 ['href' => $editUrl . '#link-account', 'label' => 'Amazon Account'],
                 ['href' => $editUrl . '#provider', 'label' => 'Amazon Settings'],
+                ['href' => $this->url->to('store/admin/listing-templates', ['channel_id' => $channel->id]), 'label' => 'Listing Templates'],
                 ['href' => $this->url->to('store/admin/cases', ['channel_id' => $channel->id]), 'label' => 'Returns & A-to-Z'],
             ]);
         } elseif ($type === 'bnq') {
             $items = array_merge($items, [
                 ['href' => $editUrl . '#link-account', 'label' => 'B&Q Account'],
                 ['href' => $editUrl . '#provider', 'label' => 'B&Q Settings'],
+                ['href' => $this->url->to('store/admin/cases', ['channel_id' => $channel->id]), 'label' => 'Incidents'],
             ]);
         } elseif ($type === 'shopify') {
             $items = array_merge($items, [
@@ -2259,6 +2261,17 @@ CSS;
             default       => 'Integration settings',
         };
         echo $this->renderProviderSettingsGrid($settings, $old['settings'] ?? [], $providerHeading);
+
+        if ($old['type'] === 'shopify') {
+            echo '<div class="sf-panel" id="shopify-messaging">';
+            echo '<div class="sf-panel-h">Buyer messaging</div>';
+            echo '<div class="sf-panel-b">';
+            echo '<div class="alert alert-secondary mb-0 small">'
+               . '<strong>Unavailable in Store.</strong> Shopify Admin API does not expose seller↔buyer '
+               . 'messaging send/list for this integration. Conversation sync returns an empty list; '
+               . 'use Shopify Inbox or customer email outside Store.</div>';
+            echo '</div></div>';
+        }
 
         // 3b) eBay Business Policies + store categories + marketplace category
         if ($old['type'] === 'ebay') {

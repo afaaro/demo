@@ -43,7 +43,7 @@ class StoreAdminCases extends Controller
 
         $channels = array_values(array_filter(
             $this->channels->all(),
-            fn(Channel $c) => in_array($c->type, ['ebay', 'amazon'], true)
+            fn(Channel $c) => in_array($c->type, ['ebay', 'amazon', 'bnq'], true)
                 && $c->enabled
                 && $c->isConnected()
         ));
@@ -79,10 +79,15 @@ class StoreAdminCases extends Controller
             $e = fn(string $s): string => $this->view->e($s);
 
             $isAmazon = $channel !== null && $channel->type === 'amazon';
-            $pageTitle = $isAmazon ? 'Amazon Returns & A-to-Z' : 'eBay Support Cases';
+            $isBnq = $channel !== null && $channel->type === 'bnq';
+            $pageTitle = $isAmazon
+                ? 'Amazon Returns & A-to-Z'
+                : ($isBnq ? 'B&Q Incidents' : 'eBay Support Cases');
             $syncConfirm = $isAmazon
                 ? 'Sync MFN returns report and A-to-Z / SAFE-T finance events from Amazon? This can take up to two minutes.'
-                : 'Sync cases and inquiries from eBay?';
+                : ($isBnq
+                    ? 'Sync B&Q Mirakl incidents and dispute-like inbox threads?'
+                    : 'Sync cases and inquiries from eBay?');
 
             echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">';
             echo '<h1 class="h3 mb-0">' . $e($pageTitle) . '</h1>';
@@ -104,7 +109,7 @@ class StoreAdminCases extends Controller
             echo '</div></div>';
 
             if ($channels === []) {
-                echo '<div class="alert alert-info">Add and connect an eBay or Amazon channel to sync support cases / returns.</div>';
+                echo '<div class="alert alert-info">Add and connect an eBay, Amazon, or B&Q channel to sync support cases / returns.</div>';
                 return;
             }
 
@@ -113,6 +118,11 @@ class StoreAdminCases extends Controller
                    . 'Amazon has no Claims API. Returns come from the MFN returns report; '
                    . 'A-to-Z / chargebacks / SAFE-T from Finances events. '
                    . 'Resolve claims in Seller Central; message the buyer from the order when needed.'
+                   . '</div>';
+            } elseif ($isBnq) {
+                echo '<div class="alert alert-info py-2">'
+                   . 'B&Q incidents come from Mirakl Incidents API when available, '
+                   . 'plus inbox threads that look like disputes/claims.'
                    . '</div>';
             }
 
@@ -283,10 +293,10 @@ class StoreAdminCases extends Controller
         $channelId = (int) $this->request->post('channel_id', 'int', 0);
         $channel = $this->channels->find($channelId);
         if ($channel === null
-            || !in_array($channel->type, ['ebay', 'amazon'], true)
+            || !in_array($channel->type, ['ebay', 'amazon', 'bnq'], true)
             || !$channel->isConnected()
         ) {
-            $this->notify->error('Connected eBay or Amazon channel required.');
+            $this->notify->error('Connected eBay, Amazon, or B&Q channel required.');
             redirect_to('store/admin/cases');
             return;
         }
@@ -304,6 +314,14 @@ class StoreAdminCases extends Controller
                     $result['returns'] ?? $result['cases'],
                     $result['atoz'] ?? 0,
                     $result['safet'] ?? 0,
+                    ($result['errors'] ?? 0) > 0 ? ', ' . $result['errors'] . ' error(s)' : ''
+                ));
+            } elseif ($channel->type === 'bnq') {
+                $this->notify->success(sprintf(
+                    'Synced B&Q incidents: %d created, %d updated (%d incidents)%s.',
+                    $result['created'],
+                    $result['updated'],
+                    $result['incidents'] ?? $result['cases'],
                     ($result['errors'] ?? 0) > 0 ? ', ' . $result['errors'] . ' error(s)' : ''
                 ));
             } else {
@@ -539,7 +557,41 @@ class StoreAdminCases extends Controller
             if ($claim === '' && $due === '') {
                 echo '<dd class="col-12 text-muted mb-0">No claim details.</dd>';
             }
-            echo '</dl></div></div></div>';
+            echo '</dl>';
+
+            $assigned = (int) ($row['assigned_user_id'] ?? 0);
+            $assigneeNames = [];
+            try {
+                $tid = TenantContext::get()->has() ? (int) TenantContext::get()->id() : 0;
+                if ($tid > 0) {
+                    foreach ((new \Module\Store\Services\TenantRepository($this->db))->usersForTenant($tid) as $u) {
+                        $uid = (int) ($u['user_id'] ?? $u['id'] ?? 0);
+                        if ($uid <= 0) {
+                            continue;
+                        }
+                        $label = trim((string) ($u['username'] ?? ''));
+                        $assigneeNames[$uid] = $label !== '' ? $label : ('User #' . $uid);
+                    }
+                }
+            } catch (\Throwable) {
+            }
+            echo '<form method="post" class="mt-3" action="'
+               . $e($this->url->to('store/admin/cases/assign')) . '">';
+            echo $this->request->csrfField();
+            echo '<input type="hidden" name="id" value="' . (int) $row['id'] . '">';
+            echo '<label class="form-label small mb-1">Assignee</label>';
+            echo '<div class="d-flex gap-2">';
+            echo '<select name="assigned_user_id" class="form-select form-select-sm">'
+               . '<option value="0">Unassigned</option>';
+            foreach ($assigneeNames as $uid => $label) {
+                echo '<option value="' . (int) $uid . '"'
+                   . ($assigned === (int) $uid ? ' selected' : '') . '>'
+                   . $e($label) . '</option>';
+            }
+            echo '</select>';
+            echo '<button type="submit" class="btn btn-sm btn-primary">Assign</button>';
+            echo '</div></form>';
+            echo '</div></div></div>';
 
             echo '<div class="col-lg-6"><div class="card border-0 shadow-sm h-100"><div class="card-body">';
             echo '<h2 class="h6 text-uppercase text-muted mb-3">Order / item</h2>';
@@ -813,6 +865,20 @@ class StoreAdminCases extends Controller
                    . $e($this->url->to('store/admin/cases/reply')) . '">';
                 echo $this->request->csrfField();
                 echo '<input type="hidden" name="id" value="' . (int) $row['id'] . '">';
+                $macros = (new \Module\Store\Services\ReplyTemplateRepository($this->db))
+                    ->all((string) ($channel->type ?? ''));
+                if ($macros !== []) {
+                    echo '<select id="sf-case-macro" class="form-select form-select-sm mb-2">';
+                    echo '<option value="">— Insert reply macro —</option>';
+                    foreach ($macros as $macro) {
+                        echo '<option value="' . $e((string) $macro['body']) . '">'
+                           . $e((string) $macro['name']) . '</option>';
+                    }
+                    echo '</select>';
+                    echo '<script>(function(){var s=document.getElementById("sf-case-macro");'
+                       . 'var t=document.querySelector("textarea[name=message]");if(!s||!t)return;'
+                       . 's.addEventListener("change",function(){if(s.value){t.value=s.value;s.selectedIndex=0;}});})();</script>';
+                }
                 echo '<textarea class="form-control mb-2" name="message" rows="4" maxlength="2000" required'
                    . ' placeholder="Write your message…"></textarea>';
                 echo '<div class="d-flex justify-content-between align-items-center">';
@@ -1093,6 +1159,34 @@ class StoreAdminCases extends Controller
             $this->notify->error('Refresh failed: ' . $e->getMessage());
         }
 
+        redirect_to('store/admin/cases/view', ['id' => $id]);
+    }
+
+    public function assignAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/cases');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/cases');
+            return;
+        }
+
+        $id = (int) $this->request->post('id', 'int', 0);
+        $assignee = (int) $this->request->post('assigned_user_id', 'int', 0);
+        $row = $this->cases->findById($id);
+        if ($row === null) {
+            $this->notify->error('Case not found.');
+            redirect_to('store/admin/cases');
+            return;
+        }
+
+        $this->cases->setAssignee($id, $assignee > 0 ? $assignee : null);
+        $this->notify->success('Case assignment updated.');
         redirect_to('store/admin/cases/view', ['id' => $id]);
     }
 

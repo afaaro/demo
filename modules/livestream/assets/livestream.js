@@ -14,6 +14,7 @@
     }
 
     stopPlayback(video);
+    video._lsHlsRetries = 0;
 
     // Prefer hls.js. Chrome returns "maybe" for native HLS but cannot
     // demux MediaMTX fMP4 playlists (DEMUXER_ERROR_COULD_NOT_PARSE).
@@ -40,6 +41,14 @@
             startPlayback(video, fallbackSrc, onReady, '');
             return;
           }
+          // Cap retries — offline paths were hammering MediaMTX forever.
+          var retries = (video._lsHlsRetries || 0) + 1;
+          video._lsHlsRetries = retries;
+          if (retries > 4) {
+            try { hls.destroy(); } catch (e) {}
+            video._lsHls = null;
+            return;
+          }
           hls.startLoad();
           return;
         }
@@ -50,6 +59,7 @@
           return;
         }
         try { hls.destroy(); } catch (e) {}
+        video._lsHls = null;
       });
       video._lsHls = hls;
       return;
@@ -363,8 +373,12 @@
           tile.setAttribute('data-ls-started', '0');
           startTilePlayback(tile);
         }
-      } else if (isLive || tile.getAttribute('data-ls-started') === '1') {
-        stopTilePlayback(tile);
+      } else {
+        // Offline: always tear down HLS, even if flags were already cleared.
+        var video = tile.querySelector('video.ls-mv-video');
+        if (isLive || tile.getAttribute('data-ls-started') === '1' || (video && video._lsHls)) {
+          stopTilePlayback(tile);
+        }
       }
     });
 
@@ -487,13 +501,14 @@
       if (badgeOff) badgeOff.hidden = true;
       if (offline) offline.hidden = true;
       video.hidden = false;
-      video.muted = true;
       video.setAttribute('playsinline', '');
       video.setAttribute('autoplay', '');
 
       var playing = root.getAttribute('data-ls-started') === '1';
       var sameSrc = (root.getAttribute('data-hls-playing') || '') === hls;
       if (!playing || !sameSrc) {
+        // Mute only when (re)starting for autoplay — never on every status poll.
+        video.muted = true;
         root.setAttribute('data-ls-started', '1');
         root.setAttribute('data-hls-playing', hls);
         if (hls) {

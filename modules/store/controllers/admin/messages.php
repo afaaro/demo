@@ -512,9 +512,12 @@ class StoreAdminMessages extends Controller
             }
         }
 
+        $assigneeNames = $this->tenantUserLabels();
+
         echo $this->view->inline(function () use (
             $channel, $convId, $convType, $messages, $sellerUsername,
-            $autoFetchError, $autoFetched, $orderSidebar, $amazonActions
+            $autoFetchError, $autoFetched, $orderSidebar, $amazonActions,
+            $existing, $assigneeNames
         ) {
             $this->view->assign('title', 'Conversation');
             $this->view->block('right_sidebar', 'Messages');
@@ -539,6 +542,42 @@ class StoreAdminMessages extends Controller
             echo '</form>';
             echo '<a href="' . $e($backUrl) . '" class="sf-conv-btn"><i class="bi bi-arrow-left"></i>Back</a>';
             echo '</div></div>';
+
+            if ($existing !== null) {
+                $assigned = (int) ($existing['assigned_user_id'] ?? 0);
+                $dueRaw = (string) ($existing['due_at'] ?? '');
+                $dueVal = $dueRaw !== '' ? substr($dueRaw, 0, 10) : '';
+                $priority = (int) ($existing['priority'] ?? 0);
+                echo '<form method="post" class="border rounded bg-white p-3 mb-3" action="'
+                   . $e($this->url->to('store/admin/messages/conversation/assign')) . '">';
+                echo $this->request->csrfField();
+                echo '<input type="hidden" name="channel_id" value="' . (int) $channel->id . '">';
+                echo '<input type="hidden" name="id" value="' . $e($convId) . '">';
+                echo '<input type="hidden" name="type" value="' . $e($convType) . '">';
+                echo '<div class="row g-2 align-items-end">';
+                echo '<div class="col-md-4"><label class="form-label small mb-1">Assignee</label>'
+                   . '<select name="assigned_user_id" class="form-select form-select-sm">'
+                   . '<option value="0">Unassigned</option>';
+                foreach ($assigneeNames as $uid => $label) {
+                    echo '<option value="' . (int) $uid . '"'
+                       . ($assigned === (int) $uid ? ' selected' : '') . '>'
+                       . $e($label) . '</option>';
+                }
+                echo '</select></div>';
+                echo '<div class="col-md-3"><label class="form-label small mb-1">Due date</label>'
+                   . '<input type="date" name="due_at" class="form-control form-control-sm" value="'
+                   . $e($dueVal) . '"></div>';
+                echo '<div class="col-md-2"><label class="form-label small mb-1">Priority</label>'
+                   . '<select name="priority" class="form-select form-select-sm">';
+                foreach ([0 => 'Normal', 1 => 'High', 2 => 'Urgent'] as $p => $plabel) {
+                    echo '<option value="' . $p . '"' . ($priority === $p ? ' selected' : '') . '>'
+                       . $e($plabel) . '</option>';
+                }
+                echo '</select></div>';
+                echo '<div class="col-md-3"><button type="submit" class="btn btn-sm btn-primary">'
+                   . 'Save assignment</button></div>';
+                echo '</div></form>';
+            }
 
             if ($autoFetched) {
                 $loadedLabel = match ($channel->type) {
@@ -617,6 +656,21 @@ class StoreAdminMessages extends Controller
                     echo '</select>';
                 }
 
+                $macros = (new \Module\Store\Services\ReplyTemplateRepository($this->db))
+                    ->all((string) $channel->type);
+                if ($macros !== []) {
+                    echo '<label class="sf-conv-label" for="sf-reply-macro">Insert macro</label>';
+                    echo '<select id="sf-reply-macro" class="form-select form-select-sm mb-2">';
+                    echo '<option value="">— Choose a reply macro —</option>';
+                    foreach ($macros as $macro) {
+                        echo '<option value="' . $e((string) $macro['body']) . '">'
+                           . $e((string) $macro['name']) . '</option>';
+                    }
+                    echo '</select>';
+                    echo '<script>(function(){var s=document.getElementById("sf-reply-macro");'
+                       . 'var t=document.getElementById("sf-conv-body");if(!s||!t)return;'
+                       . 's.addEventListener("change",function(){if(s.value){t.value=s.value;s.selectedIndex=0;}});})();</script>';
+                }
                 echo '<textarea id="sf-conv-body" name="body" rows="4" placeholder="Type your message…" maxlength="2000" required></textarea>';
                 echo '<div class="sf-conv-reply-bar">';
                 echo '<div class="sf-conv-emoji">';
@@ -831,30 +885,39 @@ JS;
         $page      = max(1, (int) $this->request->get('page', 'int', 1));
         $perPage   = 25;
         $offset    = ($page - 1) * $perPage;
+        $assignment = strtolower(trim((string) $this->request->get('assignment', 'string', '')));
+        if (!in_array($assignment, ['', 'assigned', 'unassigned', 'overdue', 'mine'], true)) {
+            $assignment = '';
+        }
 
         $channels = $this->channels->all();
         $channel  = $this->pickChannel($channels, $channelId);
 
         $repo = new \Module\Store\Services\ConversationRepository($this->db);
+        $filters = [
+            'assignment'   => $assignment,
+            'mine_user_id' => (int) ($this->auth->id() ?? 0),
+        ];
 
         $conversations = [];
         $total         = 0;
         $unreadTotal   = 0;
         $lastSync      = null;
+        $assigneeNames = $this->tenantUserLabels();
 
         if ($channel !== null) {
             // Always scope by the channel's tenant — not ambient "Working in".
             $tid = (int) $channel->tenantId;
-            $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid);
-            $total         = $repo->count((int) $channel->id, $tid);
+            $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid, $filters);
+            $total         = $repo->count((int) $channel->id, $tid, $filters);
             $unreadTotal   = $repo->countUnread((int) $channel->id, $tid);
             $lastSync      = $repo->lastSyncedAt((int) $channel->id, $tid);
 
             // If rows exist under a drifted tenant_id, repair then reload once.
-            if ($conversations === [] && $tid > 0) {
+            if ($conversations === [] && $tid > 0 && $assignment === '') {
                 $repo->rebindChannelTenant((int) $channel->id, $tid);
-                $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid);
-                $total         = $repo->count((int) $channel->id, $tid);
+                $conversations = $repo->paginate((int) $channel->id, $perPage, $offset, $tid, $filters);
+                $total         = $repo->count((int) $channel->id, $tid, $filters);
                 $unreadTotal   = $repo->countUnread((int) $channel->id, $tid);
                 $lastSync      = $repo->lastSyncedAt((int) $channel->id, $tid);
             }
@@ -862,7 +925,7 @@ JS;
 
         echo $this->view->inline(function () use (
             $channels, $channel, $page, $perPage, $offset,
-            $conversations, $total, $unreadTotal, $lastSync
+            $conversations, $total, $unreadTotal, $lastSync, $assignment, $assigneeNames
         ) {
             $this->view->assign('title', 'Messages');
             $this->view->block('right_sidebar', 'Messages');
@@ -902,6 +965,22 @@ JS;
                 return;
             }
 
+            echo '<form method="get" class="row g-2 align-items-end mb-3">';
+            echo '<input type="hidden" name="channel_id" value="' . (int) $channel->id . '">';
+            echo '<div class="col-auto"><label class="form-label small mb-1">Assignment</label>'
+               . '<select name="assignment" class="form-select form-select-sm" onchange="this.form.submit()">';
+            foreach ([
+                '' => 'All',
+                'mine' => 'Assigned to me',
+                'unassigned' => 'Unassigned',
+                'assigned' => 'Assigned',
+                'overdue' => 'Overdue',
+            ] as $val => $label) {
+                echo '<option value="' . $e($val) . '"'
+                   . ($assignment === $val ? ' selected' : '') . '>' . $e($label) . '</option>';
+            }
+            echo '</select></div></form>';
+
             echo '<section class="sf-msg-card">';
             echo '<div class="sf-msg-meta">'
             . '<strong>' . number_format($total) . '</strong> total · '
@@ -913,6 +992,7 @@ JS;
             echo '<thead><tr>'
             . '<th class="c-preview">Latest message</th><th class="c-from">From</th>'
             . '<th class="c-unread">Unread</th>'
+            . '<th>Assignee</th><th>Due</th>'
             . '<th class="c-when">When</th><th class="c-status">Status</th><th class="c-view"></th>'
             . '</tr></thead><tbody>';
 
@@ -928,6 +1008,12 @@ JS;
                     'DELETE', 'DELETED'   => ['is-bad', 'Deleted'],
                     default               => ['', (string) $conv['status']],
                 };
+                $assigneeId = (int) ($conv['assigned_user_id'] ?? 0);
+                $assignee = $assigneeId > 0
+                    ? ($assigneeNames[$assigneeId] ?? ('User #' . $assigneeId))
+                    : '—';
+                $dueAt = (string) ($conv['due_at'] ?? '');
+                $dueOverdue = $dueAt !== '' && strtotime($dueAt) !== false && strtotime($dueAt) < time();
 
                 echo '<tr' . ($unread > 0 ? ' class="is-unread"' : '') . '>';
                 echo '<td class="c-preview"><a class="sf-msg-preview" href="'
@@ -943,6 +1029,9 @@ JS;
                     ? '<span class="sf-msg-count">' . $unread . '</span>'
                     : '<span class="sf-msg-dash">—</span>';
                 echo '</td>';
+                echo '<td class="small">' . $e($assignee) . '</td>';
+                echo '<td class="small text-nowrap' . ($dueOverdue ? ' text-danger fw-semibold' : '') . '">'
+                   . $e($dueAt !== '' ? $this->formatWhen($dueAt) : '—') . '</td>';
                 echo '<td class="c-when">' . $e($this->formatWhen((string) ($conv['latest_date'] ?? ''))) . '</td>';
                 echo '<td class="c-status"><span class="sf-msg-pill ' . $pill[0] . '">'
                    . $e($pill[1]) . '</span></td>';
@@ -961,11 +1050,94 @@ JS;
                 fn (int $p) => $this->url->to('store/admin/messages/conversations', [
                     'channel_id' => $channel->id,
                     'page'       => $p,
+                    'assignment' => $assignment,
                 ]),
                 ['theme' => 'bootstrap-sm', 'class' => 'mb-0']
             );
             echo '</div>';
         });
+    }
+
+    public function assignAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/messages/conversations');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/messages/conversations');
+            return;
+        }
+
+        $channelId = (int) $this->request->post('channel_id', 'int', 0);
+        $convId = trim((string) $this->request->post('id', 'string', ''));
+        $convType = trim((string) $this->request->post('type', 'string', 'FROM_MEMBERS'));
+        $assignee = (int) $this->request->post('assigned_user_id', 'int', 0);
+        $dueAt = trim((string) $this->request->post('due_at', 'string', ''));
+        $priority = (int) $this->request->post('priority', 'int', 0);
+
+        $channel = $this->requireMessageChannel($channelId);
+        if ($channel === null || $convId === '') {
+            $this->notify->error('Conversation not found.');
+            redirect_to('store/admin/messages/conversations');
+            return;
+        }
+
+        $repo = new \Module\Store\Services\ConversationRepository($this->db);
+        $existing = $repo->find((int) $channel->id, $convId);
+        if ($existing === null) {
+            $this->notify->error('Conversation not cached yet. Refresh the thread first.');
+            redirect_to('store/admin/messages/conversation', [
+                'channel_id' => $channel->id,
+                'id'         => $convId,
+                'type'       => $convType,
+            ]);
+            return;
+        }
+
+        $rowId = (int) $existing['id'];
+        $repo->setAssignee($rowId, $assignee > 0 ? $assignee : null);
+        $repo->setDueAt($rowId, $dueAt !== '' ? $dueAt : null);
+        $repo->setPriority($rowId, $priority);
+        $this->notify->success('Assignment / SLA updated.');
+
+        redirect_to('store/admin/messages/conversation', [
+            'channel_id' => $channel->id,
+            'id'         => $convId,
+            'type'       => $convType,
+        ]);
+    }
+
+    /** @return array<int, string> */
+    private function tenantUserLabels(): array
+    {
+        $tid = \Module\Store\Services\TenantContext::get()->has()
+            ? (int) \Module\Store\Services\TenantContext::get()->id()
+            : 0;
+        if ($tid <= 0) {
+            return [];
+        }
+        try {
+            $users = (new \Module\Store\Services\TenantRepository($this->db))->usersForTenant($tid);
+        } catch (\Throwable) {
+            return [];
+        }
+        $out = [];
+        foreach ($users as $u) {
+            $uid = (int) ($u['user_id'] ?? 0);
+            if ($uid <= 0) {
+                continue;
+            }
+            $label = trim((string) ($u['username'] ?? ''));
+            if ($label === '') {
+                $label = trim((string) ($u['email'] ?? ''));
+            }
+            $out[$uid] = $label !== '' ? $label : ('User #' . $uid);
+        }
+        return $out;
     }
 
     public function syncConversationsAction(): void

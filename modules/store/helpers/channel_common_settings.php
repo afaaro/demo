@@ -71,11 +71,29 @@ return [
         'default' => true,
         'section' => 'stock_management',
     ],
+    'sellable_buffer' => [
+        'label'   => 'Sellable buffer (units withheld from channel)',
+        'type'    => 'text',
+        'default' => '0',
+        'section' => 'stock_management',
+    ],
+    'min_margin_pct' => [
+        'label'   => 'Minimum margin % (skip price sync below)',
+        'type'    => 'text',
+        'default' => '0',
+        'section' => 'stock_management',
+    ],
     'refresh_listings' => [
         'label'   => 'Refresh Listings',
         'type'    => 'checkbox',
         'default' => true,
         'section' => 'stock_management',
+    ],
+    'tracking_notify' => [
+        'label'   => 'Notify buyer on tracking status changes',
+        'type'    => 'checkbox',
+        'default' => false,
+        'section' => 'order_processing',
     ],
 
     // Misc

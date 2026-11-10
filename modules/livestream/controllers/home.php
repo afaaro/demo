@@ -98,7 +98,7 @@ class LivestreamHome extends Controller
             $live = $dbLive;
             if ($mtx !== null) {
                 $rawOnline = $mtx->isPathOnline($slug);
-                $h264Online = livestream_transcode_h264_enabled()
+                $h264Online = livestream_slug_needs_transcode($slug)
                     ? $mtx->isPathOnline(livestream_h264_slug($slug))
                     : false;
                 $live = $rawOnline || $h264Online;
@@ -118,28 +118,8 @@ class LivestreamHome extends Controller
             $hls = '';
             $hlsFallback = '';
             if ($live) {
-                // Prefer path that is actually online when we know.
-                if ($mtx !== null && livestream_transcode_h264_enabled()) {
-                    $h264Online = $mtx->isPathOnline(livestream_h264_slug($slug));
-                    $rawOnline = $mtx->isPathOnline($slug);
-                    if ($h264Online) {
-                        $hls = livestream_player_hls_url($slug);
-                        $hlsFallback = $rawOnline ? $this->playerUrlForSlug($slug) : '';
-                    } elseif ($rawOnline) {
-                        $hls = $this->playerUrlForSlug($slug);
-                    } else {
-                        $hls = livestream_player_hls_url($slug);
-                        $hlsFallback = $this->playerUrlForSlug($slug);
-                    }
-                } else {
-                    $hls = livestream_player_hls_url($slug);
-                    if (livestream_transcode_h264_enabled()) {
-                        $hlsFallback = $this->playerUrlForSlug($slug);
-                        if ($hlsFallback === $hls) {
-                            $hlsFallback = '';
-                        }
-                    }
-                }
+                // afaaro → raw; mogadishu → {_h264}. Never fall back to broken CDN raw HLS.
+                $hls = livestream_player_hls_url($slug);
             }
             $previews[] = [
                 'index'        => $i + 1,
@@ -155,18 +135,6 @@ class LivestreamHome extends Controller
         }
 
         return $previews;
-    }
-
-    private function playerUrlForSlug(string $slug): string
-    {
-        $direct = livestream_hls_url(trim($slug, '/'));
-        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || ((string) ($_SERVER['SERVER_PORT'] ?? '') === '443')
-            || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
-        if ($https && str_starts_with(strtolower($direct), 'http://')) {
-            return livestream_hls_proxy_url(trim($slug, '/'), 'index.m3u8');
-        }
-        return $direct;
     }
 
     private function mediaMtxClient(): ?MediaMtxClient

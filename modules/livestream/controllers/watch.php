@@ -33,7 +33,7 @@ class LivestreamWatch extends Controller
         $mtx = $this->mediaMtxClient();
         if ($mtx !== null) {
             $rawOnline = $mtx->isPathOnline($slugKey);
-            $h264Online = livestream_transcode_h264_enabled()
+            $h264Online = livestream_slug_needs_transcode($slugKey)
                 ? $mtx->isPathOnline(livestream_h264_slug($slugKey))
                 : false;
             $isLive = $rawOnline || $h264Online;
@@ -45,40 +45,9 @@ class LivestreamWatch extends Controller
             }
         }
 
-        $hlsUrl = '';
+        // Always preferred playback path; never fall back to broken raw CDN HLS.
+        $hlsUrl = livestream_player_hls_url($slugKey);
         $hlsFallback = '';
-        if ($isLive) {
-            if ($mtx !== null && livestream_transcode_h264_enabled()) {
-                $h264Online = $mtx->isPathOnline(livestream_h264_slug($slugKey));
-                $rawOnline = $mtx->isPathOnline($slugKey);
-                if ($h264Online) {
-                    $hlsUrl = livestream_player_hls_url($slugKey);
-                    $hlsFallback = $rawOnline ? $this->playerUrlForSlug($slugKey) : '';
-                } elseif ($rawOnline) {
-                    $hlsUrl = $this->playerUrlForSlug($slugKey);
-                } else {
-                    $hlsUrl = livestream_player_hls_url($slugKey);
-                    $hlsFallback = $this->playerUrlForSlug($slugKey);
-                }
-            } else {
-                $hlsUrl = livestream_player_hls_url($slugKey);
-                if (livestream_transcode_h264_enabled()) {
-                    $hlsFallback = $this->playerUrlForSlug($slugKey);
-                    if ($hlsFallback === $hlsUrl) {
-                        $hlsFallback = '';
-                    }
-                }
-            }
-        } else {
-            // Keep preferred URL ready for autoplay when the stream comes online.
-            $hlsUrl = livestream_player_hls_url($slugKey);
-            if (livestream_transcode_h264_enabled()) {
-                $hlsFallback = $this->playerUrlForSlug($slugKey);
-                if ($hlsFallback === $hlsUrl) {
-                    $hlsFallback = '';
-                }
-            }
-        }
 
         $title = (string) $stream['title'];
         $statusUrl = url('livestream/status', ['slug' => $slugKey]);
@@ -86,7 +55,6 @@ class LivestreamWatch extends Controller
         $this->view->assign('title', $title);
         $this->view->setTitle($title);
         $this->view->addModuleStyle('livestream', 'livestream.css');
-        // hls.js first, then module player (both defer → document order).
         $this->view->block(
             'scripts',
             '<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>'
@@ -104,18 +72,6 @@ class LivestreamWatch extends Controller
             'hlsFallback' => $hlsFallback,
             'statusUrl'   => $statusUrl,
         ]);
-    }
-
-    private function playerUrlForSlug(string $slug): string
-    {
-        $direct = livestream_hls_url(trim($slug, '/'));
-        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || ((string) ($_SERVER['SERVER_PORT'] ?? '') === '443')
-            || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
-        if ($https && str_starts_with(strtolower($direct), 'http://')) {
-            return livestream_hls_proxy_url(trim($slug, '/'), 'index.m3u8');
-        }
-        return $direct;
     }
 
     private function mediaMtxClient(): ?MediaMtxClient

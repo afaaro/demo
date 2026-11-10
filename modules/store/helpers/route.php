@@ -222,6 +222,52 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
     ],
+    'store/admin/inventory/missing-bins' => [
+        'controller' => 'store/admin/missing_bins',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/inventory/missing-bins/save' => [
+        'controller' => 'store/admin/missing_bins',
+        'action'     => 'save',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/inventory/missing-bins/relocate' => [
+        'controller' => 'store/admin/missing_bins',
+        'action'     => 'relocate',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/inventory/transfer' => [
+        'controller' => 'store/admin/inventory_transfer',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/inventory/transfer/save' => [
+        'controller' => 'store/admin/inventory_transfer',
+        'action'     => 'save',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/inventory/reserved-integrity' => [
+        'controller' => 'store/admin/reserved_integrity',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/inventory/reserved-integrity/rebuild' => [
+        'controller' => 'store/admin/reserved_integrity',
+        'action'     => 'rebuild',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
 
     // =========================================================================
     // Attributes
@@ -362,6 +408,12 @@ return [
         'auth'       => true,
         'methods'    => ['GET'],
     ],
+    'store/admin/purchase-orders/calendar' => [
+        'controller' => 'store/admin/inbound_calendar',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
     'store/admin/purchase-orders/add' => [
         'controller' => 'store/admin/purchase_orders',
         'action'     => 'add',
@@ -492,6 +544,29 @@ return [
         'methods'    => ['POST'],
         'params'     => ['id'],
     ],
+    'store/admin/purchase-orders/scan' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'scan',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/purchase-orders/apply-scans' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'applyScans',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/purchase-orders/putaway' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'putaway',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'params'     => ['id'],
+    ],
 
     // =========================================================================
     // Returns
@@ -522,6 +597,27 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
         'params'     => ['id'],
+    ],
+    'store/admin/returns/inbound' => [
+        'controller' => 'store/admin/returns',
+        'action'     => 'inbound',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/returns/receive' => [
+        'controller' => 'store/admin/returns',
+        'action'     => 'receive',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/returns/sync' => [
+        'controller' => 'store/admin/returns',
+        'action'     => 'sync',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
     ],
 
     // =========================================================================
@@ -1107,6 +1203,12 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
     ],
+    'store/admin/messages/conversation/assign' => [
+        'controller' => 'store/admin/messages',
+        'action'     => 'assign',
+        'auth'       => true,
+        'methods'    => ['POST'],
+    ],
 
     // =========================================================================
     // eBay Support Cases (Post-Order)
@@ -1148,6 +1250,111 @@ return [
         'auth'       => true,
         'methods'    => ['POST'],
     ],
+    'store/admin/cases/assign' => [
+        'controller' => 'store/admin/cases',
+        'action'     => 'assign',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/overdue' => [
+        'controller' => 'store/admin/overdue_hub',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/analytics/sku-margin' => [
+        'controller' => 'store/admin/analytics',
+        'action'     => 'skuMargin',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/analytics/supplier-otif' => [
+        'controller' => 'store/admin/analytics',
+        'action'     => 'supplierOtif',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/analytics/pick-pack' => [
+        'controller' => 'store/admin/analytics',
+        'action'     => 'pickPack',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+
+    // Stocktakes
+    'store/admin/stocktakes' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/stocktakes/new' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'new',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+    ],
+    'store/admin/stocktakes/view' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'view',
+        'auth'       => true,
+        'methods'    => ['GET'],
+        'params'     => ['id'],
+    ],
+    'store/admin/stocktakes/seed' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'seed',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/stocktakes/count' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'count',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/stocktakes/finalize' => [
+        'controller' => 'store/admin/stocktakes',
+        'action'     => 'finalize',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    // Reply macros
+    'store/admin/reply-templates' => [
+        'controller' => 'store/admin/reply_templates',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/reply-templates/new' => [
+        'controller' => 'store/admin/reply_templates',
+        'action'     => 'new',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+    ],
+    'store/admin/reply-templates/edit' => [
+        'controller' => 'store/admin/reply_templates',
+        'action'     => 'edit',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'params'     => ['id'],
+    ],
+    'store/admin/reply-templates/delete' => [
+        'controller' => 'store/admin/reply_templates',
+        'action'     => 'delete',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
 
     // =========================================================================
     // Orders
@@ -1157,6 +1364,37 @@ return [
         'action'     => 'index',
         'auth'       => true,
         'methods'    => ['GET'],
+    ],
+    'store/admin/orders/exceptions' => [
+        'controller' => 'store/admin/despatch_exceptions',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/despatch-exceptions' => [
+        'controller' => 'store/admin/despatch_exceptions',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/orders/ship-by' => [
+        'controller' => 'store/admin/ship_by',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/orders/unmapped' => [
+        'controller' => 'store/admin/unmapped',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/orders/unmapped/map' => [
+        'controller' => 'store/admin/unmapped',
+        'action'     => 'map',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
     ],
     'store/admin/orders/new' => [
         'controller' => 'store/admin/orders',
@@ -1237,6 +1475,55 @@ return [
         'methods'    => ['GET'],
         'params'     => ['id'],
     ],
+    'store/admin/orders/sync-tracking' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'syncTracking',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/orders/void-label' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'voidLabel',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/orders/recreate-label' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'recreateLabel',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/order-rules' => [
+        'controller' => 'store/admin/order_rules',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/order-rules/new' => [
+        'controller' => 'store/admin/order_rules',
+        'action'     => 'new',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/order-rules/edit' => [
+        'controller' => 'store/admin/order_rules',
+        'action'     => 'edit',
+        'auth'       => true,
+        'methods'    => ['GET'],
+        'params'     => ['id'],
+    ],
+    'store/admin/order-rules/save' => [
+        'controller' => 'store/admin/order_rules',
+        'action'     => 'save',
+        'auth'       => true,
+        'methods'    => ['POST'],
+    ],
 
     // =========================================================================
     // Pickwaves
@@ -1302,6 +1589,40 @@ return [
         'methods'    => ['POST'],
         'params'     => ['id'],
     ],
+    'store/admin/pickwaves/scan' => [
+        'controller' => 'store/admin/pickwaves',
+        'action'     => 'scan',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/pickwaves/suggest' => [
+        'controller' => 'store/admin/pickwaves',
+        'action'     => 'suggest',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+
+    'store/admin/sync-health' => [
+        'controller' => 'store/admin/sync_health',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/listing-health' => [
+        'controller' => 'store/admin/listing_health',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/listing-health/bulk' => [
+        'controller' => 'store/admin/listing_health',
+        'action'     => 'bulk',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
 
     // Admin status / tester for marketplace account deletion
     'store/admin/account-deletion' => [
@@ -1331,5 +1652,161 @@ return [
         'auth'       => false,
         'csrf'       => false,
         'methods'    => ['POST'],
+    ],
+
+    // =========================================================================
+    // Batch E
+    // =========================================================================
+    'store/admin/orders/cancel-channel' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'cancelChannel',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/orders/refund' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'refund',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/orders/credit-note' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'creditNote',
+        'auth'       => true,
+        'methods'    => ['GET'],
+        'params'     => ['id'],
+    ],
+    'store/admin/orders/prefer-courier' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'preferCourier',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/supplier-claims' => [
+        'controller' => 'store/admin/supplier_claims',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/supplier-claims/status' => [
+        'controller' => 'store/admin/supplier_claims',
+        'action'     => 'status',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/print-station' => [
+        'controller' => 'store/admin/print_station',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/print-station/print' => [
+        'controller' => 'store/admin/print_station',
+        'action'     => 'print',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/automations' => [
+        'controller' => 'store/admin/automations',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/automations/save' => [
+        'controller' => 'store/admin/automations',
+        'action'     => 'save',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/automations/run' => [
+        'controller' => 'store/admin/automations',
+        'action'     => 'run',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+    'store/admin/automations/run-due' => [
+        'controller' => 'store/admin/automations',
+        'action'     => 'runDue',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/automations/delete' => [
+        'controller' => 'store/admin/automations',
+        'action'     => 'delete',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/purchase-orders/asn' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'asn',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'params'     => ['id'],
+    ],
+    'store/admin/purchase-orders/asn-submit' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'asnSubmit',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/suppliers/portal-token' => [
+        'controller' => 'store/admin/suppliers',
+        'action'     => 'portalToken',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/admin/category-maps' => [
+        'controller' => 'store/admin/category_maps',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/category-maps/save' => [
+        'controller' => 'store/admin/category_maps',
+        'action'     => 'save',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/category-maps/delete' => [
+        'controller' => 'store/admin/category_maps',
+        'action'     => 'delete',
+        'auth'       => true,
+        'methods'    => ['POST'],
+        'params'     => ['id'],
+        'csrf'       => true,
+    ],
+
+    'store/supplier-portal' => [
+        'controller' => 'store/supplier_portal',
+        'action'     => 'index',
+        'auth'       => false,
+        'csrf'       => false,
+        'methods'    => ['GET', 'POST'],
     ],
 ];

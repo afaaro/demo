@@ -27,7 +27,10 @@ final class DashboardService
      *     orders_ready: int,
      *     pickwaves_open: int,
      *     messages_unread: int,
+     *     messages_overdue: int,
      *     cases_open: int,
+     *     cases_overdue: int,
+     *     ship_by_overdue: int,
      *     channels_connected: int
      * }
      */
@@ -145,6 +148,8 @@ final class DashboardService
             [$tid, $tid]
         )->value;
 
+        $messagesOverdue = $this->overdueConversationCount();
+
         $casesOpen = 0;
         try {
             $casesOpen = (int) $this->db->query(
@@ -165,6 +170,9 @@ final class DashboardService
             [$tid]
         )->value;
 
+        $casesOverdue = $this->overdueCaseCount();
+        $shipByOverdue = $this->overdueShipByCount();
+
         return [
             'products_total'     => $productsTotal,
             'products_active'    => $productsActive,
@@ -180,9 +188,339 @@ final class DashboardService
             'orders_ready'       => $ordersReady,
             'pickwaves_open'     => $pickwavesOpen,
             'messages_unread'    => $messagesUnread,
+            'messages_overdue'   => $messagesOverdue,
             'cases_open'         => $casesOpen,
+            'cases_overdue'      => $casesOverdue,
+            'ship_by_overdue'    => $shipByOverdue,
             'channels_connected' => $channelsConnected,
         ];
+    }
+
+    public function overdueShipByCount(): int
+    {
+        if (!TenantContext::get()->has()) {
+            return 0;
+        }
+        try {
+            return (int) $this->db->query(
+                "SELECT COUNT(*) FROM `#__store_orders` o
+                  WHERE o.`tenant_id` = ?
+                    AND UPPER(o.`status`) NOT IN ('FULFILLED', 'CANCELLED', 'CANCELED')
+                    AND JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by')) IS NOT NULL
+                    AND JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by')) <> ''
+                    AND JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by')) < CURDATE()",
+                [$this->tenantId()]
+            )->value;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    public function overdueCaseCount(): int
+    {
+        if (!TenantContext::get()->has()) {
+            return 0;
+        }
+        try {
+            return (int) $this->db->query(
+                "SELECT COUNT(*) FROM `#__store_support_cases`
+                  WHERE `tenant_id` = ?
+                    AND `seller_response_due` IS NOT NULL
+                    AND `seller_response_due` < NOW()
+                    AND UPPER(`status`) NOT IN (
+                        'CLOSED','CS_CLOSED','OTHER','CLOSED_WITH_ESCALATION',
+                        'APPROVED','COMPLETED','REFUNDED','DENIED','CANCELLED','CANCELED',
+                        'POSTED','REIMBURSED','RECEIVED','RESOLVED'
+                    )",
+                [$this->tenantId()]
+            )->value;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    public function overdueConversationCount(): int
+    {
+        if (!TenantContext::get()->has()) {
+            return 0;
+        }
+        try {
+            return (int) $this->db->query(
+                "SELECT COUNT(*) FROM `#__store_conversations`
+                  WHERE `tenant_id` = ?
+                    AND `due_at` IS NOT NULL
+                    AND `due_at` < NOW()
+                    AND UPPER(`status`) NOT IN ('ARCHIVE','ARCHIVED','DELETE','DELETED','CLOSED')",
+                [$this->tenantId()]
+            )->value;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
+     * Compact supplier OTIF summary for dashboard card.
+     *
+     * @return array{suppliers:int, otif_pct:float, late:int}
+     */
+    public function supplierOtifSummary(int $days = 180): array
+    {
+        $rows = (new PurchaseOrderRepository($this->db))->supplierOtif($days);
+        if ($rows === []) {
+            return ['suppliers' => 0, 'otif_pct' => 0.0, 'late' => 0];
+        }
+        $onTime = 0;
+        $late = 0;
+        foreach ($rows as $row) {
+            $onTime += (int) ($row['on_time'] ?? 0);
+            $late += (int) ($row['late'] ?? 0);
+        }
+        $scored = $onTime + $late;
+        return [
+            'suppliers' => count($rows),
+            'otif_pct'  => $scored > 0 ? round(($onTime / $scored) * 100, 1) : 0.0,
+            'late'      => $late,
+        ];
+    }
+
+    /**
+     * Contribution margin by channel: revenue − cost − channel fees − shipping cost.
+     *
+     * @return list<array{
+     *   channel_id:int, channel_label:string, revenue:float, cost:float,
+     *   fees:float, shipping:float, margin:float, orders:int
+     * }>
+     */
+    public function marginByChannel(int $days = 30): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $days = max(1, min(365, $days));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT o.`channel_id`,
+                    COALESCE(NULLIF(c.`label`, ''), c.`name`, 'Channel') AS channel_label,
+                    COUNT(DISTINCT o.`id`) AS orders,
+                    COALESCE(SUM(i.`qty` * i.`price`), 0) AS revenue,
+                    COALESCE(SUM(
+                      i.`qty` * COALESCE(
+                        NULLIF(v.`cost`, 0),
+                        NULLIF(p.`cost`, 0),
+                        0
+                      )
+                    ), 0) AS cost,
+                    COALESCE((
+                      SELECT SUM(o2.`channel_fee`)
+                        FROM `#__store_orders` o2
+                       WHERE o2.`tenant_id` = o.`tenant_id`
+                         AND o2.`channel_id` <=> o.`channel_id`
+                         AND UPPER(o2.`status`) IN ('FULFILLED', 'SHIPPED', 'COMPLETED', 'DELIVERED')
+                         AND o2.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                    ), 0) AS fees,
+                    COALESCE((
+                      SELECT SUM(o3.`shipping_cost`)
+                        FROM `#__store_orders` o3
+                       WHERE o3.`tenant_id` = o.`tenant_id`
+                         AND o3.`channel_id` <=> o.`channel_id`
+                         AND UPPER(o3.`status`) IN ('FULFILLED', 'SHIPPED', 'COMPLETED', 'DELIVERED')
+                         AND o3.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                    ), 0)
+                    + COALESCE((
+                      SELECT SUM(s.`carrier_cost`)
+                        FROM `#__store_shipments` s
+                        INNER JOIN `#__store_orders` o4
+                          ON o4.`id` = s.`order_id` AND o4.`tenant_id` = s.`tenant_id`
+                       WHERE s.`tenant_id` = o.`tenant_id`
+                         AND o4.`channel_id` <=> o.`channel_id`
+                         AND UPPER(o4.`status`) IN ('FULFILLED', 'SHIPPED', 'COMPLETED', 'DELIVERED')
+                         AND o4.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                    ), 0) AS shipping
+               FROM `#__store_orders` o
+               JOIN `#__store_order_items` i
+                 ON i.`order_id` = o.`id` AND i.`tenant_id` = o.`tenant_id`
+               LEFT JOIN `#__store_product_variants` v
+                 ON v.`id` = i.`variant_id` AND v.`tenant_id` = o.`tenant_id`
+               LEFT JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = o.`tenant_id`
+               LEFT JOIN `#__store_channels` c
+                 ON c.`id` = o.`channel_id` AND c.`tenant_id` = o.`tenant_id`
+              WHERE o.`tenant_id` = ?
+                AND UPPER(o.`status`) IN ('FULFILLED', 'SHIPPED', 'COMPLETED', 'DELIVERED')
+                AND o.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              GROUP BY o.`channel_id`, channel_label
+              ORDER BY revenue DESC",
+            [$days, $days, $days, $tid, $days]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $revenue = round((float) ($row['revenue'] ?? 0), 2);
+            $cost = round((float) ($row['cost'] ?? 0), 2);
+            $fees = round((float) ($row['fees'] ?? 0), 2);
+            $shipping = round((float) ($row['shipping'] ?? 0), 2);
+            $out[] = [
+                'channel_id'    => (int) ($row['channel_id'] ?? 0),
+                'channel_label' => (string) ($row['channel_label'] ?? ''),
+                'revenue'       => $revenue,
+                'cost'          => $cost,
+                'fees'          => $fees,
+                'shipping'      => $shipping,
+                'margin'        => round($revenue - $cost - $fees - $shipping, 2),
+                'orders'        => (int) ($row['orders'] ?? 0),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * SKU × channel contribution margin (fees shared by order revenue weight).
+     *
+     * @return list<array{
+     *   sku:string, channel_id:int, channel_label:string, qty:int,
+     *   revenue:float, cost:float, fees:float, margin:float
+     * }>
+     */
+    public function skuMarginByChannel(int $days = 30, int $limit = 100): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $days = max(1, min(365, $days));
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT COALESCE(NULLIF(i.`external_sku`, ''), v.`sku`, CONCAT('vid:', i.`variant_id`)) AS sku,
+                    o.`channel_id`,
+                    COALESCE(NULLIF(c.`label`, ''), c.`name`, 'Channel') AS channel_label,
+                    SUM(i.`qty`) AS qty,
+                    COALESCE(SUM(i.`qty` * i.`price`), 0) AS revenue,
+                    COALESCE(SUM(i.`qty` * COALESCE(NULLIF(v.`cost`, 0), NULLIF(p.`cost`, 0), 0)), 0) AS cost,
+                    COALESCE(SUM(
+                      CASE WHEN o.`total` > 0
+                        THEN (i.`qty` * i.`price` / o.`total`) * COALESCE(o.`channel_fee`, 0)
+                        ELSE 0 END
+                    ), 0) AS fees,
+                    COALESCE(SUM(
+                      CASE WHEN o.`total` > 0
+                        THEN (i.`qty` * i.`price` / o.`total`) * COALESCE((
+                          SELECT SUM(s.`carrier_cost`)
+                            FROM `#__store_shipments` s
+                           WHERE s.`order_id` = o.`id` AND s.`tenant_id` = o.`tenant_id`
+                        ), 0)
+                        ELSE 0 END
+                    ), 0) AS carrier
+               FROM `#__store_order_items` i
+               JOIN `#__store_orders` o
+                 ON o.`id` = i.`order_id` AND o.`tenant_id` = i.`tenant_id`
+               LEFT JOIN `#__store_product_variants` v
+                 ON v.`id` = i.`variant_id` AND v.`tenant_id` = i.`tenant_id`
+               LEFT JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = i.`tenant_id`
+               LEFT JOIN `#__store_channels` c
+                 ON c.`id` = o.`channel_id` AND c.`tenant_id` = o.`tenant_id`
+              WHERE i.`tenant_id` = ?
+                AND UPPER(o.`status`) IN ('FULFILLED', 'SHIPPED', 'COMPLETED', 'DELIVERED')
+                AND o.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              GROUP BY sku, o.`channel_id`, channel_label
+              ORDER BY revenue DESC
+              LIMIT ?",
+            [$tid, $days, $limit]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $revenue = round((float) ($row['revenue'] ?? 0), 2);
+            $cost = round((float) ($row['cost'] ?? 0), 2);
+            $fees = round((float) ($row['fees'] ?? 0) + (float) ($row['carrier'] ?? 0), 2);
+            $out[] = [
+                'sku'           => (string) ($row['sku'] ?? ''),
+                'channel_id'    => (int) ($row['channel_id'] ?? 0),
+                'channel_label' => (string) ($row['channel_label'] ?? ''),
+                'qty'           => (int) ($row['qty'] ?? 0),
+                'revenue'       => $revenue,
+                'cost'          => $cost,
+                'fees'          => $fees,
+                'margin'        => round($revenue - $cost - $fees, 2),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Active variants with qty>0 and no sales in the last N days.
+     *
+     * @return list<array{
+     *   variant_id:int, product_id:int, sku:string, product_name:string,
+     *   quantity:int, reserved:int, cost:float, days_since_sale:?int
+     * }>
+     */
+    public function deadStock(int $days = 90, int $limit = 100): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $days = max(1, min(730, $days));
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT v.`id` AS variant_id, p.`id` AS product_id, v.`sku`, p.`name` AS product_name,
+                    COALESCE(inv.`quantity`, 0) AS quantity,
+                    COALESCE(inv.`reserved`, 0) AS reserved,
+                    COALESCE(v.`cost`, 0) AS cost,
+                    (
+                      SELECT MAX(o.`created_at`)
+                        FROM `#__store_order_items` oi
+                        JOIN `#__store_orders` o ON o.`id` = oi.`order_id`
+                       WHERE oi.`variant_id` = v.`id`
+                         AND o.`tenant_id` = v.`tenant_id`
+                         AND UPPER(o.`status`) NOT IN ('CANCELLED', 'CANCELED')
+                    ) AS last_sale_at
+               FROM `#__store_product_variants` v
+               JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = v.`tenant_id`
+               JOIN `#__store_inventory` inv
+                 ON inv.`variant_id` = v.`id` AND inv.`tenant_id` = v.`tenant_id`
+              WHERE v.`tenant_id` = ?
+                AND v.`active` = 1 AND p.`active` = 1
+                AND COALESCE(inv.`quantity`, 0) > 0
+                AND (
+                  NOT EXISTS (
+                    SELECT 1 FROM `#__store_order_items` oi2
+                      JOIN `#__store_orders` o2 ON o2.`id` = oi2.`order_id`
+                     WHERE oi2.`variant_id` = v.`id`
+                       AND o2.`tenant_id` = v.`tenant_id`
+                       AND UPPER(o2.`status`) NOT IN ('CANCELLED', 'CANCELED')
+                       AND o2.`created_at` >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                  )
+                )
+              ORDER BY inv.`quantity` DESC, v.`sku` ASC
+              LIMIT ?",
+            [$tid, $days, $limit]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $last = (string) ($row['last_sale_at'] ?? '');
+            $daysSince = null;
+            if ($last !== '') {
+                $ts = strtotime($last);
+                if ($ts !== false) {
+                    $daysSince = (int) floor((time() - $ts) / 86400);
+                }
+            }
+            $out[] = [
+                'variant_id'      => (int) ($row['variant_id'] ?? 0),
+                'product_id'      => (int) ($row['product_id'] ?? 0),
+                'sku'             => (string) ($row['sku'] ?? ''),
+                'product_name'    => (string) ($row['product_name'] ?? ''),
+                'quantity'        => (int) ($row['quantity'] ?? 0),
+                'reserved'        => (int) ($row['reserved'] ?? 0),
+                'cost'            => (float) ($row['cost'] ?? 0),
+                'days_since_sale' => $daysSince,
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -410,6 +748,131 @@ final class DashboardService
     }
 
     /**
+     * Pick/pack performance from scans + completed pickwaves.
+     *
+     * @return array{
+     *   summary: array{
+     *     units_scanned: int, pick_units: int, pack_units: int,
+     *     waves_completed: int, avg_despatch_hours: float|null,
+     *     scans_per_hour: float|null
+     *   },
+     *   by_user: list<array{
+     *     user_id: int, pick_units: int, pack_units: int, total_units: int,
+     *     units_per_hour: float|null, first_scan: ?string, last_scan: ?string
+     *   }>
+     * }
+     */
+    public function pickPackPerformance(int $days = 30): array
+    {
+        $empty = [
+            'summary' => [
+                'units_scanned' => 0,
+                'pick_units' => 0,
+                'pack_units' => 0,
+                'waves_completed' => 0,
+                'avg_despatch_hours' => null,
+                'scans_per_hour' => null,
+            ],
+            'by_user' => [],
+        ];
+        if (!TenantContext::get()->has()) {
+            return $empty;
+        }
+        $days = max(1, min(365, $days));
+        $tid = $this->tenantId();
+
+        $totals = $this->db->query(
+            "SELECT COALESCE(SUM(s.`qty`), 0) AS units,
+                    COALESCE(SUM(CASE WHEN COALESCE(NULLIF(s.`stage`, ''), 'pick') = 'pick' THEN s.`qty` ELSE 0 END), 0) AS pick_units,
+                    COALESCE(SUM(CASE WHEN COALESCE(NULLIF(s.`stage`, ''), 'pick') = 'pack' THEN s.`qty` ELSE 0 END), 0) AS pack_units,
+                    MIN(s.`created_at`) AS first_scan,
+                    MAX(s.`created_at`) AS last_scan
+               FROM `#__store_pickwave_scans` s
+              WHERE s.`tenant_id` = ?
+                AND s.`created_at` >= (NOW() - INTERVAL {$days} DAY)",
+            [$tid]
+        )->row;
+
+        $wavesCompleted = (int) $this->db->query(
+            "SELECT COUNT(*) FROM `#__store_pickwaves`
+              WHERE `tenant_id` = ?
+                AND LOWER(`status`) = 'completed'
+                AND COALESCE(`completed_at`, `created_at`) >= (NOW() - INTERVAL {$days} DAY)",
+            [$tid]
+        )->value;
+
+        $avgHours = $this->db->query(
+            "SELECT AVG(TIMESTAMPDIFF(MINUTE, `created_at`, `completed_at`)) / 60.0 AS hrs
+               FROM `#__store_pickwaves`
+              WHERE `tenant_id` = ?
+                AND LOWER(`status`) = 'completed'
+                AND `completed_at` IS NOT NULL
+                AND `completed_at` >= (NOW() - INTERVAL {$days} DAY)",
+            [$tid]
+        )->row;
+
+        $units = (int) ($totals['units'] ?? 0);
+        $first = (string) ($totals['first_scan'] ?? '');
+        $last = (string) ($totals['last_scan'] ?? '');
+        $scansPerHour = null;
+        if ($units > 0 && $first !== '' && $last !== '') {
+            $hours = max(1 / 60, (strtotime($last) - strtotime($first)) / 3600);
+            $scansPerHour = round($units / $hours, 1);
+        }
+
+        $byUserRows = $this->db->query(
+            "SELECT COALESCE(s.`user_id`, 0) AS user_id,
+                    COALESCE(SUM(CASE WHEN COALESCE(NULLIF(s.`stage`, ''), 'pick') = 'pick' THEN s.`qty` ELSE 0 END), 0) AS pick_units,
+                    COALESCE(SUM(CASE WHEN COALESCE(NULLIF(s.`stage`, ''), 'pick') = 'pack' THEN s.`qty` ELSE 0 END), 0) AS pack_units,
+                    COALESCE(SUM(s.`qty`), 0) AS total_units,
+                    MIN(s.`created_at`) AS first_scan,
+                    MAX(s.`created_at`) AS last_scan
+               FROM `#__store_pickwave_scans` s
+              WHERE s.`tenant_id` = ?
+                AND s.`created_at` >= (NOW() - INTERVAL {$days} DAY)
+              GROUP BY COALESCE(s.`user_id`, 0)
+              ORDER BY total_units DESC
+              LIMIT 50",
+            [$tid]
+        )->rows;
+
+        $byUser = [];
+        foreach ($byUserRows as $row) {
+            $total = (int) ($row['total_units'] ?? 0);
+            $uf = (string) ($row['first_scan'] ?? '');
+            $ul = (string) ($row['last_scan'] ?? '');
+            $uph = null;
+            if ($total > 0 && $uf !== '' && $ul !== '') {
+                $hours = max(1 / 60, (strtotime($ul) - strtotime($uf)) / 3600);
+                $uph = round($total / $hours, 1);
+            }
+            $byUser[] = [
+                'user_id'        => (int) ($row['user_id'] ?? 0),
+                'pick_units'     => (int) ($row['pick_units'] ?? 0),
+                'pack_units'     => (int) ($row['pack_units'] ?? 0),
+                'total_units'    => $total,
+                'units_per_hour' => $uph,
+                'first_scan'     => $uf !== '' ? $uf : null,
+                'last_scan'      => $ul !== '' ? $ul : null,
+            ];
+        }
+
+        return [
+            'summary' => [
+                'units_scanned'      => $units,
+                'pick_units'         => (int) ($totals['pick_units'] ?? 0),
+                'pack_units'         => (int) ($totals['pack_units'] ?? 0),
+                'waves_completed'    => $wavesCompleted,
+                'avg_despatch_hours' => isset($avgHours['hrs']) && $avgHours['hrs'] !== null
+                    ? round((float) $avgHours['hrs'], 2)
+                    : null,
+                'scans_per_hour'     => $scansPerHour,
+            ],
+            'by_user' => $byUser,
+        ];
+    }
+
+    /**
      * @return array{
      *     products_total: int,
      *     products_active: int,
@@ -425,7 +888,10 @@ final class DashboardService
      *     orders_ready: int,
      *     pickwaves_open: int,
      *     messages_unread: int,
+     *     messages_overdue: int,
      *     cases_open: int,
+     *     cases_overdue: int,
+     *     ship_by_overdue: int,
      *     channels_connected: int
      * }
      */
@@ -446,7 +912,10 @@ final class DashboardService
             'orders_ready'       => 0,
             'pickwaves_open'     => 0,
             'messages_unread'    => 0,
+            'messages_overdue'   => 0,
             'cases_open'         => 0,
+            'cases_overdue'      => 0,
+            'ship_by_overdue'    => 0,
             'channels_connected' => 0,
         ];
     }

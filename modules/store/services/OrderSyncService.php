@@ -87,6 +87,14 @@ final class OrderSyncService
         // Open order lines reserve stock (Products grid "On Back Order").
         (new InventoryService($this->db))->rebuildReservedFromOpenOrders();
 
+        if ($channel->type === 'amazon') {
+            try {
+                $this->ingestAmazonFees($channel, $days);
+            } catch (\Throwable $e) {
+                error_log('Amazon fee ingest after sync: ' . $e->getMessage());
+            }
+        }
+
         return [
             'created'   => $created,
             'updated'   => $updated,
@@ -308,7 +316,8 @@ final class OrderSyncService
 
         $tenantId = (int) ($data['tenant_id'] ?? 0);
 
-        return $this->db->transaction(function (Database $db) use ($data, $existing, $lineItems, $isNew, $tenantId) {
+        /** @var array{0: string, 1: int} $result */
+        $result = $this->db->transaction(function (Database $db) use ($data, $existing, $lineItems, $isNew, $tenantId) {
             if ($isNew) {
                 $orderId = $db->insert('store_orders', $data);
             } else {
@@ -328,6 +337,28 @@ final class OrderSyncService
 
             return [$isNew ? 'created' : 'updated', (int) $orderId];
         });
+
+        $status = $result[0];
+        $orderId = $result[1];
+
+        // Post-commit: packaging suggest + shipping-rule mapping (best-effort).
+        try {
+            (new OrderPackagingService($this->db))->suggestAndPersist($orderId, $isNew);
+        } catch (\Throwable $e) {
+            error_log('Order packaging suggest #' . $orderId . ': ' . $e->getMessage());
+        }
+        try {
+            (new ShippingRuleApplyService($this->db))->applyToOrderId($orderId);
+        } catch (\Throwable $e) {
+            error_log('Shipping rule apply #' . $orderId . ': ' . $e->getMessage());
+        }
+        try {
+            (new OrderRuleApplyService($this->db))->applyToOrderId($orderId);
+        } catch (\Throwable $e) {
+            error_log('Order rule apply #' . $orderId . ': ' . $e->getMessage());
+        }
+
+        return [$status, $orderId];
     }
 
     /**
@@ -398,7 +429,8 @@ final class OrderSyncService
         string $externalId,
         float $addTotal,
     ): array {
-        return $this->db->transaction(function (Database $db) use (
+        /** @var array{0: string, 1: int} $result */
+        $result = $this->db->transaction(function (Database $db) use (
             $existing,
             $incoming,
             $lineItems,
@@ -444,6 +476,17 @@ final class OrderSyncService
 
             return ['merged', $orderId];
         });
+
+        $resultOrderId = $result[1];
+        try {
+            (new OrderPackagingService($this->db))->suggestAndPersist($resultOrderId, false);
+            (new ShippingRuleApplyService($this->db))->applyToOrderId($resultOrderId);
+            (new OrderRuleApplyService($this->db))->applyToOrderId($resultOrderId);
+        } catch (\Throwable $e) {
+            error_log('Post-merge packaging/rules #' . $resultOrderId . ': ' . $e->getMessage());
+        }
+
+        return $result;
     }
 
     /**
@@ -533,7 +576,10 @@ final class OrderSyncService
         }
 
         $feePct = (float) ChannelSettings::string($channel, 'channel_percentage_fee', '');
-        $fee = $feePct > 0 ? round($total * ($feePct / 100), 2) : 0.0;
+        $estimatedFee = $feePct > 0 ? round($total * ($feePct / 100), 2) : 0.0;
+        $realFee = $this->extractRealChannelFee($order);
+        // Prefer marketplace-reported fees over percentage estimates.
+        $fee = $realFee !== null ? $realFee : $estimatedFee;
 
         $shippingTax = 0.0;
         if ($shipping > 0 && ChannelSettings::bool($channel, 'calculate_shipping_tax', false)) {
@@ -549,6 +595,155 @@ final class OrderSyncService
             'channel_fee'      => $fee,
             'shipping_tax'     => $shippingTax,
         ];
+    }
+
+    /**
+     * Real fee from channel order payload when present (eBay totalMarketplaceFee etc.).
+     *
+     * @param array<string, mixed> $order
+     */
+    private function extractRealChannelFee(array $order): ?float
+    {
+        $candidates = [
+            $order['totalMarketplaceFee'] ?? null,
+            $order['totalFeeBasisAmount'] ?? null,
+            $order['totalMarketplaceFee']['value'] ?? null,
+            $order['pricingSummary']['totalMarketplaceFee']['value'] ?? null,
+            $order['pricingSummary']['fee']['value'] ?? null,
+            $order['OrderTotal']['Amount'] ?? null, // never treat as fee
+        ];
+
+        // eBay often nests fees under paymentSummary / totalFeeBasisAmount sibling.
+        $payment = is_array($order['paymentSummary'] ?? null) ? $order['paymentSummary'] : [];
+        if (isset($payment['totalFeeAmount']['value'])) {
+            $candidates[] = $payment['totalFeeAmount']['value'];
+        }
+        if (isset($payment['payments']) && is_array($payment['payments'])) {
+            $sum = 0.0;
+            $found = false;
+            foreach ($payment['payments'] as $p) {
+                if (!is_array($p)) {
+                    continue;
+                }
+                foreach (($p['paymentHoldDetails'] ?? []) as $ignored) {
+                    unset($ignored);
+                }
+                // fee collected from payment marketplaceFee / feeAmount lists if present
+                foreach (['marketplaceFees', 'fees', 'feeBasisAmount'] as $feeKey) {
+                    $list = $p[$feeKey] ?? null;
+                    if (!is_array($list)) {
+                        continue;
+                    }
+                    // Single money object
+                    if (isset($list['value'])) {
+                        $sum += abs((float) $list['value']);
+                        $found = true;
+                        continue;
+                    }
+                    foreach ($list as $feeRow) {
+                        if (!is_array($feeRow)) {
+                            continue;
+                        }
+                        $amt = $feeRow['amount']['value'] ?? $feeRow['value'] ?? null;
+                        if ($amt !== null && is_numeric($amt)) {
+                            $sum += abs((float) $amt);
+                            $found = true;
+                        }
+                    }
+                }
+            }
+            if ($found && $sum > 0) {
+                return round($sum, 2);
+            }
+        }
+
+        // Amazon SP-API normalized fee (if client attached it).
+        if (isset($order['_amazon_fee']) && is_numeric($order['_amazon_fee'])) {
+            return round(abs((float) $order['_amazon_fee']), 2);
+        }
+        if (isset($order['OrderTotal']['channel_fee']) && is_numeric($order['OrderTotal']['channel_fee'])) {
+            return round(abs((float) $order['OrderTotal']['channel_fee']), 2);
+        }
+
+        foreach ($candidates as $raw) {
+            if (is_array($raw) && isset($raw['value']) && is_numeric($raw['value'])) {
+                $v = abs((float) $raw['value']);
+                return $v > 0 ? round($v, 2) : null;
+            }
+            if (is_numeric($raw)) {
+                $v = abs((float) $raw);
+                // Skip OrderTotal Amount misuse — only accept known fee keys above.
+                if ($v > 0 && $raw !== ($order['OrderTotal']['Amount'] ?? null)) {
+                    return round($v, 2);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Apply Amazon Finances fee events onto matching orders.channel_fee.
+     *
+     * @return array{updated: int, skipped: int, errors: int}
+     */
+    public function ingestAmazonFees(Channel $channel, int $lookbackDays = 30): array
+    {
+        $stats = ['updated' => 0, 'skipped' => 0, 'errors' => 0];
+        if ($channel->type !== 'amazon' || !$channel->isConnected()) {
+            return $stats;
+        }
+        if (!$this->channelTenantAllowed($channel)) {
+            return $stats;
+        }
+
+        $client = $this->factory->make($channel);
+        if (!method_exists($client, 'fetchOrderFeeTotals')) {
+            return $stats;
+        }
+
+        try {
+            /** @var array<string, float> $fees */
+            $fees = $client->fetchOrderFeeTotals($lookbackDays);
+        } catch (\Throwable $e) {
+            error_log('Amazon fee ingest: ' . $e->getMessage());
+            $stats['errors']++;
+            return $stats;
+        }
+
+        $tenantId = $this->channelTenantId($channel);
+        foreach ($fees as $externalOrderId => $fee) {
+            $externalOrderId = trim((string) $externalOrderId);
+            $fee = round(abs((float) $fee), 2);
+            if ($externalOrderId === '' || $fee <= 0) {
+                $stats['skipped']++;
+                continue;
+            }
+            $row = $this->db->query(
+                "SELECT `id`, `channel_fee` FROM `#__store_orders`
+                  WHERE `tenant_id` = ? AND `channel_id` = ? AND `external_order_id` = ?
+                  LIMIT 1",
+                [$tenantId, (int) $channel->id, $externalOrderId]
+            )->row;
+            if ($row === [] || $row === null) {
+                $stats['skipped']++;
+                continue;
+            }
+            // Only overwrite when real fee differs (or existing was estimate / zero).
+            if (abs((float) ($row['channel_fee'] ?? 0) - $fee) < 0.005) {
+                $stats['skipped']++;
+                continue;
+            }
+            $this->db->update('store_orders', [
+                'channel_fee' => $fee,
+            ], [
+                'id'        => (int) $row['id'],
+                'tenant_id' => $tenantId,
+            ]);
+            $stats['updated']++;
+        }
+
+        return $stats;
     }
 
     private function parseEbayDate(mixed $raw): ?string

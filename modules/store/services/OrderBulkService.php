@@ -19,6 +19,7 @@ final class OrderBulkService
         private OrderDespatchService $despatch,
         private PackagingSizeRepository $packaging,
         private ShippingMethodRepository $methods,
+        private ?OrderChannelActionService $channelActions = null,
     ) {}
 
     /**
@@ -50,6 +51,7 @@ final class OrderBulkService
             'alter_shipping'  => $this->alterShipping($ids, (int) ($opts['shipping_method_id'] ?? 0)),
             'cancel'          => $this->setStatus($ids, 'CANCELLED', keepStock: false),
             'cancel_keep'     => $this->setStatus($ids, 'CANCELLED', keepStock: true),
+            'cancel_channel'  => $this->cancelOnChannel($ids),
             'clone'           => $this->cloneOrders($ids),
             'delete'          => $this->deleteOrders($ids),
             'pre_despatch'    => $this->flag($ids, ['pre_despatched' => 1], 'Pre-despatched'),
@@ -62,6 +64,30 @@ final class OrderBulkService
             'priority'        => $this->flag($ids, ['is_priority' => 1], 'Marked priority'),
             default           => throw new RuntimeException('Unknown bulk action.'),
         };
+    }
+
+    /** @param list<int> $ids */
+    private function cancelOnChannel(array $ids): array
+    {
+        $svc = $this->channelActions;
+        if ($svc === null) {
+            throw new RuntimeException('Channel cancel service is not configured for bulk actions.');
+        }
+        $ok = 0;
+        $errors = 0;
+        foreach ($ids as $id) {
+            try {
+                $svc->cancelOnChannelAndLocal($id);
+                $ok++;
+            } catch (\Throwable) {
+                $errors++;
+            }
+        }
+        $msg = "Channel-cancelled {$ok} order(s).";
+        if ($errors > 0) {
+            $msg .= " {$errors} failed.";
+        }
+        return ['message' => $msg];
     }
 
     /** @param list<int> $ids */

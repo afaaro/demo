@@ -142,7 +142,7 @@ final class ListingRepository
     }
 
     /**
-     * @param array{channel_title?: string, price?: float|null, oversell?: int, controlled?: bool} $data
+     * @param array{channel_title?: string, price?: float|null, oversell?: int, qty_buffer?: int, controlled?: bool} $data
      */
     public function updateFields(int $listingId, array $data): void
     {
@@ -159,6 +159,13 @@ final class ListingRepository
         }
         if (array_key_exists('oversell', $data)) {
             $patch['oversell'] = max(0, (int) $data['oversell']);
+        }
+        if (array_key_exists('qty_buffer', $data)) {
+            $patch['qty_buffer'] = max(0, (int) $data['qty_buffer']);
+        }
+        if (array_key_exists('min_price', $data)) {
+            $min = $data['min_price'];
+            $patch['min_price'] = $min === null || $min === '' ? null : round((float) $min, 2);
         }
         if (array_key_exists('controlled', $data)) {
             $patch['controlled'] = !empty($data['controlled']) ? 1 : 0;
@@ -241,6 +248,95 @@ final class ListingRepository
         ], $this->withTenant(['id' => (int) $existing->id]));
     }
 
+    /**
+     * Listings needing attention: ended, error, or local qty vs channel mismatch signal.
+     * Qty mismatch = controlled listing with oversell=0 and local available <= 0 while status is pushed,
+     * or last_error mentioning qty/quantity/stock.
+     *
+     * @return list<array{
+     *   listing: Listing, channel_label:string, channel_type:string,
+     *   variant_sku:string, product_name:string, product_id:int,
+     *   available:int, reason:string
+     * }>
+     */
+    public function healthIssues(int $limit = 200): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT l.*,
+                    COALESCE(NULLIF(c.`label`, ''), c.`name`, '') AS channel_label,
+                    COALESCE(c.`type`, '') AS channel_type,
+                    COALESCE(v.`sku`, l.`external_sku`, '') AS variant_sku,
+                    COALESCE(p.`name`, '') AS product_name,
+                    COALESCE(p.`id`, 0) AS product_id,
+                    COALESCE(i.`quantity`, 0) - COALESCE(i.`reserved`, 0) AS available
+               FROM `#__store_listings` l
+               LEFT JOIN `#__store_channels` c
+                 ON c.`id` = l.`channel_id` AND c.`tenant_id` = l.`tenant_id`
+               LEFT JOIN `#__store_product_variants` v
+                 ON v.`id` = l.`variant_id` AND v.`tenant_id` = l.`tenant_id`
+               LEFT JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = v.`tenant_id`
+               LEFT JOIN `#__store_inventory` i
+                 ON i.`variant_id` = l.`variant_id` AND i.`tenant_id` = l.`tenant_id`
+              WHERE l.`tenant_id` = ?
+                AND (
+                  LOWER(l.`status`) IN ('ended', 'error', 'inactive')
+                  OR (
+                    LOWER(l.`status`) = 'pushed'
+                    AND COALESCE(l.`controlled`, 1) = 1
+                    AND (COALESCE(i.`quantity`, 0) - COALESCE(i.`reserved`, 0)) <= 0
+                  )
+                  OR (
+                    l.`last_error` <> ''
+                    AND (
+                      LOWER(l.`last_error`) LIKE '%qty%'
+                      OR LOWER(l.`last_error`) LIKE '%quantity%'
+                      OR LOWER(l.`last_error`) LIKE '%stock%'
+                      OR LOWER(l.`last_error`) LIKE '%inventory%'
+                    )
+                  )
+                )
+              ORDER BY
+                CASE LOWER(l.`status`)
+                  WHEN 'error' THEN 0
+                  WHEN 'ended' THEN 1
+                  ELSE 2
+                END,
+                l.`updated_at` DESC,
+                l.`id` DESC
+              LIMIT ?",
+            [$tid, $limit]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $status = strtolower((string) ($row['status'] ?? ''));
+            $available = (int) ($row['available'] ?? 0);
+            $reason = match (true) {
+                $status === 'error' => 'error',
+                $status === 'ended', $status === 'inactive' => 'ended',
+                $available <= 0 && $status === 'pushed' => 'qty_mismatch',
+                default => 'error',
+            };
+            $out[] = [
+                'listing'       => $this->hydrate($row),
+                'channel_label' => (string) ($row['channel_label'] ?? ''),
+                'channel_type'  => (string) ($row['channel_type'] ?? ''),
+                'variant_sku'   => (string) ($row['variant_sku'] ?? ''),
+                'product_name'  => (string) ($row['product_name'] ?? ''),
+                'product_id'    => (int) ($row['product_id'] ?? 0),
+                'available'     => $available,
+                'reason'        => $reason,
+            ];
+        }
+        return $out;
+    }
+
     public function delete(int $id): void
     {
         if ($id <= 0 || !TenantContext::get()->has()) {
@@ -264,7 +360,10 @@ final class ListingRepository
         $l->channelTitle = (string) ($row['channel_title'] ?? '');
         $priceRaw        = $row['price'] ?? null;
         $l->price        = $priceRaw === null || $priceRaw === '' ? null : (float) $priceRaw;
+        $minRaw          = $row['min_price'] ?? null;
+        $l->minPrice     = $minRaw === null || $minRaw === '' ? null : (float) $minRaw;
         $l->oversell     = (int) ($row['oversell'] ?? 0);
+        $l->qtyBuffer    = (int) ($row['qty_buffer'] ?? 0);
         $l->controlled   = (bool) ($row['controlled'] ?? true);
         $l->status       = (string) $row['status'];
         $l->lastError    = (string) ($row['last_error'] ?? '');

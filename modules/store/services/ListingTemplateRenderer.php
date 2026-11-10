@@ -34,6 +34,7 @@ final class ListingTemplateRenderer
             return [
                 'title'       => $fallbackTitle,
                 'description' => $fallbackDescription,
+                'attributes'  => [],
             ];
         }
 
@@ -55,6 +56,31 @@ final class ListingTemplateRenderer
         return [
             'title'       => $title !== '' ? $title : $fallbackTitle,
             'description' => $desc !== '' ? $desc : $fallbackDescription,
+            'attributes'  => $this->renderAttributes($template->attributes, $vars),
         ];
+    }
+
+    /**
+     * Render a template attribute map; empty values are dropped.
+     *
+     * @param array<string, string> $attributes
+     * @param array<string, scalar|null> $vars
+     * @return array<string, string>
+     */
+    public function renderAttributes(array $attributes, array $vars): array
+    {
+        $out = [];
+        foreach ($attributes as $key => $value) {
+            $name = trim((string) $key);
+            if ($name === '') {
+                continue;
+            }
+            $rendered = trim($this->render((string) $value, $vars));
+            if ($rendered === '') {
+                continue;
+            }
+            $out[$name] = $rendered;
+        }
+        return $out;
     }
 }

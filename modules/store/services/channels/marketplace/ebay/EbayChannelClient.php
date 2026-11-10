@@ -1319,6 +1319,40 @@ final class EbayChannelClient implements ChannelClientInterface
         return $this->postOrder()->issueInquiryRefund($inquiryId, $comments);
     }
 
+    /**
+     * Search eBay returns via Post-Order Returns API.
+     *
+     * @return array{members: list<array<string, mixed>>, total: int, offset: int, limit: int}
+     */
+    public function searchReturns(
+        string $returnState = 'ALL',
+        int $limit = 50,
+        int $offset = 0,
+        int $lookbackDays = 90,
+    ): array {
+        return $this->postOrder()->searchReturns($returnState, $limit, $offset, $lookbackDays);
+    }
+
+    /** @return array<string, mixed> */
+    public function getReturn(string $returnId): array
+    {
+        return $this->postOrder()->getReturn($returnId);
+    }
+
+    /**
+     * Refund an eBay return via Post-Order Returns API.
+     *
+     * @return array<string, mixed>
+     */
+    public function issueReturnRefund(
+        string $returnId,
+        ?float $amount = null,
+        string $currency = 'GBP',
+        string $comments = '',
+    ): array {
+        return $this->postOrder()->issueReturnRefund($returnId, $amount, $currency, $comments);
+    }
+
     /** @return array<string, mixed> */
     public function escalateSupportInquiry(
         string $inquiryId,

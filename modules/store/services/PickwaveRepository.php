@@ -636,7 +636,112 @@ final class PickwaveRepository
             }
         }
 
+        $shipByFrom = trim((string) ($filters['ship_by_from'] ?? ''));
+        if ($shipByFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $shipByFrom)) {
+            $clauses[] = "JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by')) >= ?";
+            $params[] = $shipByFrom;
+        }
+        $shipByTo = trim((string) ($filters['ship_by_to'] ?? ''));
+        if ($shipByTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $shipByTo)) {
+            $clauses[] = "JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by')) <= ?";
+            $params[] = $shipByTo;
+        }
+        $shippingMethod = trim((string) ($filters['shipping_method'] ?? ''));
+        if ($shippingMethod !== '') {
+            $clauses[] = 'o.`shipping_method` LIKE ?';
+            $params[] = '%' . $shippingMethod . '%';
+        }
+        $warehouse = trim((string) ($filters['warehouse'] ?? ''));
+        if ($warehouse !== '') {
+            $clauses[] = 'o.`warehouse` = ?';
+            $params[] = $warehouse;
+        }
+        if (!empty($filters['priority'])) {
+            $clauses[] = 'COALESCE(o.`is_priority`, 0) = 1';
+        }
+
         return [' WHERE ' . implode(' AND ', $clauses), $params];
+    }
+
+    /**
+     * Suggest outstanding order IDs matching smart-wave filters.
+     *
+     * @param array{
+     *   channel_id?: int, ship_by_from?: string, ship_by_to?: string,
+     *   shipping_method?: string, warehouse?: string, priority?: bool|int,
+     *   brands?: array<int, string>, q?: string, sku?: string
+     * } $filters
+     * @return list<int>
+     */
+    public function suggestOutstandingOrderIds(array $filters = [], int $limit = 100): array
+    {
+        $limit = max(1, min(500, $limit));
+        $rows = $this->outstandingOrders($limit * 2, 0, $filters, 'ship_by', 'asc');
+
+        // Prefer orders whose warehouse has location stock for mapped variants.
+        $warehouse = trim((string) ($filters['warehouse'] ?? ''));
+        if ($warehouse !== '' || $this->hasLocationStock()) {
+            usort($rows, function (array $a, array $b) use ($warehouse): int {
+                $scoreA = $this->warehouseStockScore((int) $a['id'], (string) ($a['warehouse'] ?? $warehouse));
+                $scoreB = $this->warehouseStockScore((int) $b['id'], (string) ($b['warehouse'] ?? $warehouse));
+                if ($scoreA !== $scoreB) {
+                    return $scoreB <=> $scoreA;
+                }
+                return ((int) $a['id']) <=> ((int) $b['id']);
+            });
+        }
+
+        $ids = array_values(array_map(static fn(array $r): int => (int) $r['id'], $rows));
+        return array_slice($ids, 0, $limit);
+    }
+
+    private function hasLocationStock(): bool
+    {
+        if (!TenantContext::get()->has()) {
+            return false;
+        }
+        try {
+            return (int) $this->db->query(
+                "SELECT 1 FROM `#__store_inventory_locations`
+                  WHERE `tenant_id` = ? AND `quantity` > 0 LIMIT 1",
+                [$this->tenantId()]
+            )->value === 1;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** Higher = better warehouse stock coverage for order lines. */
+    private function warehouseStockScore(int $orderId, string $warehouse): int
+    {
+        if ($orderId <= 0 || !TenantContext::get()->has()) {
+            return 0;
+        }
+        $warehouse = trim($warehouse);
+        if ($warehouse === '') {
+            $warehouse = 'Default';
+        }
+        try {
+            $row = $this->db->query(
+                "SELECT COUNT(*) AS lines,
+                        SUM(CASE WHEN COALESCE(loc.`quantity`, 0) >= GREATEST(
+                              CAST(i.`qty` AS SIGNED) - CAST(COALESCE(i.`qty_shipped`, 0) AS SIGNED), 0
+                            ) THEN 1 ELSE 0 END) AS covered
+                   FROM `#__store_order_items` i
+                   LEFT JOIN `#__store_warehouses` w
+                     ON w.`name` = ? AND w.`tenant_id` = i.`tenant_id`
+                   LEFT JOIN `#__store_inventory_locations` loc
+                     ON loc.`variant_id` = i.`variant_id`
+                    AND loc.`warehouse_id` = w.`id`
+                    AND loc.`tenant_id` = i.`tenant_id`
+                  WHERE i.`order_id` = ? AND i.`tenant_id` = ?
+                    AND i.`variant_id` IS NOT NULL AND i.`variant_id` > 0",
+                [$warehouse, $orderId, $this->tenantId()]
+            )->row;
+            return (int) ($row['covered'] ?? 0);
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 
     /**

@@ -680,6 +680,149 @@ final class BnqChannelClient implements ChannelClientInterface
     }
 
     /**
+     * Pull Mirakl incidents plus dispute-like inbox threads as support-case rows.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function fetchIncidentsAndDisputes(int $limit = 50): array
+    {
+        $limit = max(1, min(100, $limit));
+        $out = [];
+        $mirakl = $this->mirakl();
+
+        foreach ($mirakl->listIncidents($limit, 0) as $row) {
+            $mapped = $this->normalizeIncident($row);
+            if ($mapped !== null) {
+                $out[] = $mapped;
+            }
+        }
+
+        // Map open threads that look like disputes / incidents when Incidents API is empty.
+        $page = $mirakl->listThreads($limit, null, true);
+        foreach ($page['threads'] as $thread) {
+            if (!$this->threadLooksLikeDispute($thread)) {
+                continue;
+            }
+            $mapped = $this->normalizeDisputeThread($thread);
+            if ($mapped !== null) {
+                $out[] = $mapped;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>|null
+     */
+    private function normalizeIncident(array $row): ?array
+    {
+        $id = trim((string) ($row['id'] ?? $row['incident_id'] ?? ''));
+        if ($id === '') {
+            return null;
+        }
+        $status = strtoupper(trim((string) ($row['status'] ?? $row['state'] ?? 'OPEN')));
+        $orderId = trim((string) (
+            $row['order_id']
+            ?? $row['commercial_id']
+            ?? (is_array($row['order'] ?? null) ? ($row['order']['order_id'] ?? '') : '')
+            ?? ''
+        ));
+        $reason = trim((string) ($row['reason_code'] ?? $row['reason'] ?? $row['type'] ?? 'INCIDENT'));
+
+        return [
+            'kind'                => 'bnq_incident',
+            'external_id'         => $id,
+            'case_type'           => $reason !== '' ? $reason : 'BNQ_INCIDENT',
+            'status'              => $status !== '' ? $status : 'OPEN',
+            'item_id'             => '',
+            'transaction_id'      => '',
+            'order_id'            => $orderId,
+            'buyer_login'         => trim((string) ($row['customer_id'] ?? $row['customer_login'] ?? '')),
+            'claim_amount'        => isset($row['amount']) ? (float) $row['amount'] : null,
+            'claim_currency'      => (string) ($row['currency_iso_code'] ?? $row['currency'] ?? ''),
+            'item_title'          => mb_substr((string) ($row['product_title'] ?? $row['label'] ?? ''), 0, 255),
+            'seller_response_due' => $this->parseFlexibleDate((string) ($row['date_created'] ?? '')),
+            'creation_date'       => $this->parseFlexibleDate((string) ($row['date_created'] ?? '')),
+            'last_modified_date'  => $this->parseFlexibleDate((string) ($row['last_updated'] ?? $row['date_updated'] ?? '')),
+            'summary'             => $row,
+            'detail'              => $row,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $thread
+     */
+    private function threadLooksLikeDispute(array $thread): bool
+    {
+        $topic = is_array($thread['topic'] ?? null) ? $thread['topic'] : [];
+        $topicType = strtoupper(trim((string) ($topic['type'] ?? '')));
+        $topicValue = strtoupper(trim((string) ($topic['value'] ?? '')));
+        $hay = $topicType . ' ' . $topicValue;
+        foreach (['DISPUTE', 'INCIDENT', 'CLAIM', 'COMPLAINT', 'OPEN_INCIDENT'] as $needle) {
+            if (str_contains($hay, $needle)) {
+                return true;
+            }
+        }
+        $entities = is_array($thread['entities'] ?? null) ? $thread['entities'] : [];
+        foreach ($entities as $entity) {
+            if (!is_array($entity)) {
+                continue;
+            }
+            $type = strtoupper(trim((string) ($entity['type'] ?? '')));
+            if (in_array($type, ['INCIDENT', 'DISPUTE', 'CLAIM'], true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $thread
+     * @return array<string, mixed>|null
+     */
+    private function normalizeDisputeThread(array $thread): ?array
+    {
+        $id = trim((string) ($thread['id'] ?? ''));
+        if ($id === '') {
+            return null;
+        }
+        $topic = is_array($thread['topic'] ?? null) ? $thread['topic'] : [];
+        $entity = $this->primaryEntity($thread);
+        $meta = is_array($thread['metadata'] ?? null) ? $thread['metadata'] : [];
+
+        return [
+            'kind'                => 'bnq_incident',
+            'external_id'         => 'thread:' . $id,
+            'case_type'           => trim((string) ($topic['type'] ?? 'BNQ_THREAD_DISPUTE')) ?: 'BNQ_THREAD_DISPUTE',
+            'status'              => !empty($meta['shop_reply_needed_since']) ? 'OPEN' : 'WAITING',
+            'item_id'             => '',
+            'transaction_id'      => '',
+            'order_id'            => (string) ($entity['id'] ?? ''),
+            'buyer_login'         => '',
+            'claim_amount'        => null,
+            'claim_currency'      => '',
+            'item_title'          => mb_substr((string) ($topic['value'] ?? $entity['label'] ?? ''), 0, 255),
+            'seller_response_due' => $this->parseFlexibleDate((string) ($meta['shop_reply_needed_since'] ?? '')),
+            'creation_date'       => $this->parseFlexibleDate((string) ($thread['date_created'] ?? '')),
+            'last_modified_date'  => $this->parseFlexibleDate((string) ($thread['date_updated'] ?? '')),
+            'summary'             => $thread,
+            'detail'              => $thread,
+        ];
+    }
+
+    private function parseFlexibleDate(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        $ts = strtotime($raw);
+        return $ts !== false ? date('Y-m-d H:i:s', $ts) : null;
+    }
+
+    /**
      * Map Mirakl inbox thread → Store conversation header.
      *
      * @param array<string, mixed> $thread

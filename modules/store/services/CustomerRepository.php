@@ -46,7 +46,7 @@ final class CustomerRepository
         $rows = $this->db->query(
             "SELECT `id`, `reference`, `name`, `email`, `phone`, `is_business`,
                     `bill_company`, `bill_address1`, `bill_city`, `bill_postcode`,
-                    `created_at`
+                    `tags_json`, `created_at`
                FROM `#__store_customers`
               {$where}
               ORDER BY {$sortCol} {$dirSql}, `id` DESC
@@ -699,6 +699,12 @@ final class CustomerRepository
         $like('`bill_postcode`', (string) ($filters['postcode'] ?? ''));
         $like('`email`', (string) ($filters['email'] ?? ''));
 
+        $tag = trim((string) ($filters['tag'] ?? ''));
+        if ($tag !== '') {
+            $parts[] = "JSON_SEARCH(`tags_json`, 'one', ?, NULL, '$[*]') IS NOT NULL";
+            $params[] = $tag;
+        }
+
         $created = trim((string) ($filters['created'] ?? ''));
         if ($created !== '') {
             $parts[] = "DATE_FORMAT(`created_at`, '%d/%m/%Y %H:%i') LIKE ?";
@@ -755,11 +761,28 @@ final class CustomerRepository
             return mb_substr(trim((string) ($v ?? '')), 0, $max);
         };
 
+        $tags = $data['tags'] ?? $data['tags_json'] ?? [];
+        if (is_string($tags)) {
+            $tags = preg_split('/[,;]+/', $tags) ?: [];
+        }
+        if (!is_array($tags)) {
+            $tags = [];
+        }
+        $tags = array_values(array_unique(array_filter(array_map(
+            static fn($t): string => mb_substr(trim((string) $t), 0, 64),
+            $tags
+        ), static fn(string $t): bool => $t !== '')));
+        $tagsJson = json_encode($tags, JSON_UNESCAPED_UNICODE);
+        if (!is_string($tagsJson)) {
+            $tagsJson = '[]';
+        }
+
         return [
             'name'          => $str($data['name'] ?? '', 191),
             'email'         => $str($data['email'] ?? '', 191),
             'email_cc'      => $str($data['email_cc'] ?? '', 512),
             'phone'         => $str($data['phone'] ?? '', 64),
+            'tags_json'     => $tagsJson,
             'vat_number'    => $str($data['vat_number'] ?? '', 64),
             'air_number'    => $str($data['air_number'] ?? '', 64),
             'ukims_number'  => $str($data['ukims_number'] ?? '', 64),
@@ -783,6 +806,23 @@ final class CustomerRepository
         ];
     }
 
+    /** @param mixed $raw @return list<string> */
+    public static function decodeTags(mixed $raw): array
+    {
+        if (is_array($raw)) {
+            $tags = $raw;
+        } else {
+            $tags = json_decode((string) ($raw ?? '[]'), true) ?: [];
+        }
+        if (!is_array($tags)) {
+            return [];
+        }
+        return array_values(array_filter(array_map(
+            static fn($t): string => trim((string) $t),
+            $tags
+        ), static fn(string $t): bool => $t !== ''));
+    }
+
     /** @param array<string, mixed> $row @return array<string, mixed> */
     private function mapListRow(array $row): array
     {
@@ -792,6 +832,7 @@ final class CustomerRepository
             'name'          => (string) ($row['name'] ?? ''),
             'email'         => (string) ($row['email'] ?? ''),
             'phone'         => (string) ($row['phone'] ?? ''),
+            'tags'          => self::decodeTags($row['tags_json'] ?? []),
             'is_business'   => (int) ($row['is_business'] ?? 0) === 1,
             'bill_company'  => (string) ($row['bill_company'] ?? ''),
             'bill_address1' => (string) ($row['bill_address1'] ?? ''),
@@ -811,6 +852,7 @@ final class CustomerRepository
             'email'         => (string) ($row['email'] ?? ''),
             'email_cc'      => (string) ($row['email_cc'] ?? ''),
             'phone'         => (string) ($row['phone'] ?? ''),
+            'tags'          => self::decodeTags($row['tags_json'] ?? []),
             'vat_number'    => (string) ($row['vat_number'] ?? ''),
             'air_number'    => (string) ($row['air_number'] ?? ''),
             'ukims_number'  => (string) ($row['ukims_number'] ?? ''),

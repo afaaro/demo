@@ -206,12 +206,35 @@ function livestream_transcode_h264_enabled(): bool
     return in_array((string) $raw, ['1', 'true', 'on', 'yes'], true);
 }
 
-/** Slug used by the website player (H.264 shadow path when transcode is on). */
+/** True when this slug should play/publish via {_h264} (CDN sources with broken DTS). */
+function livestream_slug_needs_transcode(string $slug): bool
+{
+    if (!livestream_transcode_h264_enabled()) {
+        return false;
+    }
+    $slug = strtolower(trim($slug, '/'));
+    if ($slug === '' || str_ends_with($slug, '_h264')) {
+        return false;
+    }
+    $only = livestream_config()['hls_transcode_slugs'] ?? null;
+    // Empty / missing list ⇒ all slugs (legacy). Non-empty ⇒ allow-list only.
+    if (!is_array($only) || $only === []) {
+        return true;
+    }
+    $only = array_map(
+        static fn($s): string => strtolower(trim((string) $s, '/')),
+        $only
+    );
+    return in_array($slug, $only, true);
+}
+
+/** Slug used by the website player (H.264 shadow path when needed). */
 function livestream_playback_slug(string $slug): string
 {
-    return livestream_transcode_h264_enabled()
+    $slug = trim($slug, '/');
+    return livestream_slug_needs_transcode($slug)
         ? livestream_h264_slug($slug)
-        : trim($slug, '/');
+        : $slug;
 }
 
 /** HTTPS-safe playlist URL for the watch page player (proxies HTTP MediaMTX). */
@@ -229,21 +252,43 @@ function livestream_hls_proxy_url(string $slug, string $file = 'index.m3u8'): st
 }
 
 /**
- * Player source: use same-origin HTTPS proxy when the page is HTTPS and
- * MediaMTX HLS is plain HTTP (browsers block / upgrade mixed content).
- * When hls_transcode_h264 is on, play the {_h264} path (browser-safe).
+ * Browser player URL — always same-origin HLS proxy.
+ * Avoids mixed content, hairpin NAT to :8888, and hlsCDNSecret.
+ * Playback slug is raw (afaaro) or {_h264} (mogadishu) per config.
  */
 function livestream_player_hls_url(string $slug): string
 {
-    $playSlug = livestream_playback_slug($slug);
-    $direct = livestream_hls_url($playSlug);
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || ((string) ($_SERVER['SERVER_PORT'] ?? '') === '443')
-        || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
-    if ($https && str_starts_with(strtolower($direct), 'http://')) {
-        return livestream_hls_proxy_url($playSlug, 'index.m3u8');
+    return livestream_hls_proxy_url(livestream_playback_slug($slug), 'index.m3u8');
+}
+
+/**
+ * MediaMTX base for the site HLS proxy.
+ * Loopback only on local requests; soomaali.net uses hls_public_base.
+ */
+function livestream_hls_proxy_upstream(): string
+{
+    $cfg = livestream_config();
+    $configured = rtrim((string) ($cfg['hls_proxy_upstream'] ?? ''), '/');
+    $public = rtrim((string) ($cfg['hls_public_base'] ?? ''), '/');
+
+    $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+    $host = (string) preg_replace('/:\d+$/', '', $host);
+    $isLocalRequest = in_array($host, ['127.0.0.1', 'localhost', '::1'], true)
+        || str_ends_with($host, '.local');
+
+    $configuredIsLoopback = $configured !== '' && (
+        str_contains($configured, '://127.0.0.1')
+        || str_contains($configured, '://localhost')
+        || str_contains($configured, '://[::1]')
+    );
+
+    if ($configuredIsLoopback && !$isLocalRequest) {
+        return $public !== '' ? $public : $configured;
     }
-    return $direct;
+    if ($configured !== '') {
+        return $configured;
+    }
+    return $public;
 }
 
 /**
@@ -259,10 +304,7 @@ function livestream_hls_telemetry(string $slug): ?array
     }
 
     $cfg = livestream_config();
-    $base = rtrim((string) ($cfg['hls_proxy_upstream'] ?? ''), '/');
-    if ($base === '') {
-        $base = rtrim((string) ($cfg['hls_public_base'] ?? ''), '/');
-    }
+    $base = livestream_hls_proxy_upstream();
     if ($base === '') {
         return null;
     }
@@ -270,9 +312,8 @@ function livestream_hls_telemetry(string $slug): ?array
     $secret = trim((string) ($cfg['hls_cdn_secret'] ?? ''));
     $webSlug = livestream_playback_slug($slug);
     $web = livestream_fetch_hls_summary($base, $webSlug, $secret);
-    $source = ($webSlug !== $slug)
-        ? livestream_fetch_hls_summary($base, $slug, $secret)
-        : $web;
+    // Never probe raw ingest HLS for transcode slugs (DTS crashes MediaMTX).
+    $source = ($webSlug === $slug) ? $web : null;
 
     if ($web === null && $source === null) {
         return null;

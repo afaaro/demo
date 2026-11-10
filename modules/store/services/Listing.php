@@ -12,7 +12,9 @@ final class Listing
     public string  $externalSku  = '';
     public string  $channelTitle = '';
     public ?float  $price        = null;
+    public ?float  $minPrice     = null;
     public int     $oversell     = 0;
+    public int     $qtyBuffer    = 0;
     public bool    $controlled   = true;
     public string  $status       = 'pending';
     public string  $lastError    = '';
@@ -35,7 +37,9 @@ final class Listing
             'external_sku'   => $this->externalSku,
             'channel_title'  => $this->channelTitle,
             'price'          => $this->price,
+            'min_price'      => $this->minPrice,
             'oversell'       => $this->oversell,
+            'qty_buffer'     => $this->qtyBuffer,
             'controlled'     => $this->controlled,
             'status'         => $this->status,
             'last_error'     => $this->lastError,

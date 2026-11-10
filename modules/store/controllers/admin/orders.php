@@ -9,14 +9,17 @@ use Module\Store\Services\CredentialsVault;
 use Module\Store\Services\CustomerRepository;
 use Module\Store\Services\OrderAuditRepository;
 use Module\Store\Services\OrderBulkService;
+use Module\Store\Services\OrderChannelActionService;
 use Module\Store\Services\OrderDespatchService;
 use Module\Store\Services\OrderRepository;
+use Module\Store\Services\SerialRepository;
 use Module\Store\Services\OrderSavedFilterRepository;
 use Module\Store\Services\OrderSyncService;
 use Module\Store\Services\PackagingSizeRepository;
 use Module\Store\Services\ReturnRepository;
 use Module\Store\Services\ShipmentRepository;
 use Module\Store\Services\ShippingMethodRepository;
+use Module\Store\Services\SyncLogRepository;
 use Module\Store\Services\WarehouseRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
@@ -510,6 +513,7 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
                 'alter_shipping'    => 'Alter shipping method',
                 'cancel'            => 'Cancel orders',
                 'cancel_keep'       => 'Cancel orders - Keep Stock Allocated',
+                'cancel_channel'    => 'Cancel on channel + local',
                 'clone'             => 'Clone orders',
                 'delete'            => 'Delete orders',
                 'pre_despatch'      => 'Pre-Despatch orders',
@@ -764,7 +768,7 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
         alert('Select at least one order.');
         return;
       }
-      if (action === 'delete' || action === 'cancel' || action === 'cancel_keep') {
+      if (action === 'delete' || action === 'cancel' || action === 'cancel_keep' || action === 'cancel_channel') {
         if (!confirm('Apply "' + bulkAction.options[bulkAction.selectedIndex].text + '" to ' + n + ' order(s)?')) {
           e.preventDefault();
         }
@@ -934,6 +938,14 @@ HTML;
             new OrderDespatchService($this->db, $this->channels, $this->factory),
             $this->packaging,
             $this->methods,
+            new OrderChannelActionService(
+                $this->db,
+                $this->channels,
+                $this->factory,
+                $this->orders,
+                new SyncLogRepository($this->db),
+                new OrderAuditRepository($this->db),
+            ),
         );
 
         try {
@@ -1155,8 +1167,13 @@ HTML;
             }
 
             $shipments = new ShipmentRepository($this->db);
+            $allShipments = $shipments->forOrder((int) $order['id']);
             $shipment  = $shipments->findLatestForOrder((int) $order['id']);
             $hasLabel = $shipment !== null && trim((string) ($shipment['label_path'] ?? '')) !== '';
+            $activeShipments = array_values(array_filter(
+                $allShipments,
+                static fn(array $s): bool => strtolower((string) ($s['status'] ?? '')) !== 'voided'
+            ));
 
             $itemsSubtotal = 0.0;
             $itemsQty = 0;
@@ -1243,13 +1260,14 @@ HTML;
             foreach ([
                 'NOT_STARTED' => 'Complete [Ready To Pick]',
                 'IN_PROGRESS' => 'In progress',
+                'PARTIALLY_SHIPPED' => 'Partially shipped',
                 'FULFILLED'   => 'Fulfilled / Despatched',
                 'CANCELLED'   => 'Cancelled',
             ] as $val => $label) {
                 $sel = $status === $val ? ' selected' : '';
                 echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
             }
-            if ($status !== '' && !in_array($status, ['NOT_STARTED', 'IN_PROGRESS', 'FULFILLED', 'CANCELLED'], true)) {
+            if ($status !== '' && !in_array($status, ['NOT_STARTED', 'IN_PROGRESS', 'PARTIALLY_SHIPPED', 'FULFILLED', 'CANCELLED'], true)) {
                 echo '<option value="' . $e($status) . '" selected>' . $e($status) . '</option>';
             }
             echo '</select></div>';
@@ -1404,6 +1422,66 @@ HTML;
                . '<input type="text" class="form-control form-control-sm" name="special_instructions"'
                . ' id="special_instructions" maxlength="500" value="'
                . $e((string) ($order['special_instructions'] ?? '')) . '"></div>';
+            $preferredCourier = trim((string) ($order['preferred_courier'] ?? ''));
+            if ($preferredCourier !== '' || $mapped !== '') {
+                echo '<div class="col-12 small text-muted">Rule-mapped courier: <strong>'
+                   . $e($preferredCourier !== '' ? $preferredCourier : '—')
+                   . '</strong>'
+                   . ($mapped !== '' ? ' · method <strong>' . $e($mapped) . '</strong>' : '')
+                   . '</div>';
+            }
+            if ($allShipments !== []) {
+                echo '<div class="col-12"><div class="table-responsive"><table class="table table-sm mb-0 border">'
+                   . '<thead class="table-light"><tr><th>#</th><th>Tracking</th><th>Status</th>'
+                   . '<th class="text-end">Cost</th><th>Label</th><th></th></tr></thead><tbody>';
+                foreach ($allShipments as $shipRow) {
+                    $sid = (int) ($shipRow['id'] ?? 0);
+                    $st = strtolower((string) ($shipRow['status'] ?? 'created'));
+                    $isVoid = $st === 'voided';
+                    echo '<tr' . ($isVoid ? ' class="table-secondary"' : '') . '>';
+                    echo '<td>' . (int) ($shipRow['parcel_index'] ?? 1) . '</td>';
+                    echo '<td><code class="small">' . $e((string) ($shipRow['tracking_number'] ?: $shipRow['barcode'] ?? '')) . '</code></td>';
+                    echo '<td><span class="badge text-bg-secondary">' . $e($st) . '</span></td>';
+                    echo '<td class="text-end">'
+                       . ((float) ($shipRow['carrier_cost'] ?? 0) > 0
+                            ? number_format((float) $shipRow['carrier_cost'], 2) : '—')
+                       . '</td>';
+                    echo '<td>';
+                    if (!$isVoid && trim((string) ($shipRow['label_path'] ?? '')) !== '') {
+                        echo '<a class="btn btn-outline-secondary btn-sm py-0" target="_blank" href="'
+                           . $e($this->url->to('store/admin/orders/label', [
+                               'id' => (int) $order['id'],
+                               'shipment_id' => $sid,
+                           ])) . '">PDF</a>';
+                    } else {
+                        echo '—';
+                    }
+                    echo '</td><td class="text-nowrap">';
+                    if (!$isVoid) {
+                        echo '<form method="post" class="d-inline" action="'
+                           . $e($this->url->to('store/admin/orders/sync-tracking', ['id' => (int) $order['id']])) . '">'
+                           . $this->request->csrfField()
+                           . '<input type="hidden" name="shipment_id" value="' . $sid . '">'
+                           . '<button type="submit" class="btn btn-outline-secondary btn-sm py-0">Sync</button></form> ';
+                        echo '<form method="post" class="d-inline" action="'
+                           . $e($this->url->to('store/admin/orders/void-label', ['id' => (int) $order['id']])) . '"'
+                           . ' onsubmit="return confirm(\'Void this label?\');">'
+                           . $this->request->csrfField()
+                           . '<input type="hidden" name="shipment_id" value="' . $sid . '">'
+                           . '<button type="submit" class="btn btn-outline-danger btn-sm py-0">Void</button></form>';
+                    }
+                    echo '</td></tr>';
+                }
+                echo '</tbody></table></div>';
+                if ($activeShipments !== []) {
+                    echo '<form method="post" class="mt-2" action="'
+                       . $e($this->url->to('store/admin/orders/recreate-label', ['id' => (int) $order['id']])) . '"'
+                       . ' onsubmit="return confirm(\'Void all labels and recreate?\');">'
+                       . $this->request->csrfField()
+                       . '<button type="submit" class="btn btn-outline-primary btn-sm">Void + recreate labels</button></form>';
+                }
+                echo '</div>';
+            }
             echo '</div></div></div></div>';
 
             // Items
@@ -1420,6 +1498,7 @@ HTML;
 
             echo '<thead class="table-light"><tr>'
                . '<th>SKU</th><th>Product</th><th class="text-end">Qty</th>'
+               . '<th class="text-end">Shipped</th>'
                . '<th class="text-end">Unit</th><th class="text-end">Line</th>'
                . '<th class="text-end">Stock</th><th class="text-end">Available</th>'
                . '<th>Status</th><th>Warehouse</th>'
@@ -1427,6 +1506,7 @@ HTML;
             foreach ($items as $item) {
                 $itemId = (int) ($item['id'] ?? 0);
                 $qty = max(1, (int) ($item['order_qty'] ?? $item['qty'] ?? 1));
+                $qtyShipped = max(0, (int) ($item['qty_shipped'] ?? 0));
                 $price = (float) ($item['price'] ?? 0);
                 $line = $qty * $price;
                 $kitSku = trim((string) ($item['kit_sku'] ?? ''));
@@ -1460,6 +1540,9 @@ HTML;
                     echo $qty;
                 }
                 echo '</td>';
+                echo '<td class="text-end small">' . $qtyShipped
+                   . ($qtyShipped < $qty ? ' <span class="text-muted">/ ' . $qty . '</span>' : '')
+                   . '</td>';
                 echo '<td class="text-end">' . number_format($price, 2) . '</td>';
                 echo '<td class="text-end">' . number_format($line, 2) . '</td>';
                 echo '<td class="text-end">';
@@ -1533,16 +1616,60 @@ HTML;
 
             echo '</div></form>'; // row + main form
 
+            // Channel cancel + refund cockpit
+            if (!in_array($status, ['CANCELLED', 'CANCELED'], true)) {
+                echo '<div class="sf-od-panel" id="cancel-refund"><div class="sf-od-panel-h">Cancel / refund cockpit</div>'
+                   . '<div class="sf-od-panel-b"><div class="row g-3">';
+                echo '<div class="col-md-6"><form method="post" action="'
+                   . $e($this->url->to('store/admin/orders/cancel-channel', ['id' => (int) $order['id']])) . '"'
+                   . ' onsubmit="return confirm(\'Cancel on channel and locally?\');">'
+                   . $this->request->csrfField()
+                   . '<p class="small text-muted">Cancels on the sales channel when an API exists, then marks local CANCELLED.</p>'
+                   . '<button type="submit" class="btn btn-outline-danger btn-sm">'
+                   . '<i class="bi bi-x-circle me-1"></i>Cancel on channel + local</button></form></div>';
+                echo '<div class="col-md-6"><form method="post" action="'
+                   . $e($this->url->to('store/admin/orders/refund', ['id' => (int) $order['id']])) . '"'
+                   . ' onsubmit="return confirm(\'Issue refund on channel?\');">'
+                   . $this->request->csrfField()
+                   . '<div class="row g-2 align-items-end">'
+                   . '<div class="col-5"><label class="form-label small">Amount</label>'
+                   . '<input type="number" step="0.01" min="0" name="amount" class="form-control form-control-sm" value="'
+                   . $e(number_format((float) $order['total'], 2, '.', '')) . '"></div>'
+                   . '<div class="col-4"><label class="form-label small">Return ID (eBay)</label>'
+                   . '<input type="text" name="return_id" class="form-control form-control-sm" placeholder="optional"></div>'
+                   . '<div class="col-3"><button type="submit" class="btn btn-outline-warning btn-sm w-100">'
+                   . 'Issue refund</button></div></div>'
+                   . '<p class="small text-muted mb-0 mt-1">Uses eBay Post-Order / Amazon helpers when available; otherwise logs a skip.</p>'
+                   . '</form></div>';
+                echo '</div></div></div>';
+            }
+
             // Fulfillment (separate form — mark shipped)
             $courierSvc = new CourierShipmentService(
                 $this->channels,
                 $this->factory,
                 $shipments,
                 BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                $this->db,
             );
             $couriers = $courierSvc->connectedCouriers();
+            $rateQuotes = [];
+            try {
+                $rateQuotes = $courierSvc->quoteRates($order, $items);
+            } catch (\Throwable) {
+            }
+            $serialRepo = new SerialRepository($this->db);
+            $serialRequired = $serialRepo->requiredSerialItems($items);
             $hasCourier = $couriers !== [];
             $defaultCourier = $couriers[0] ?? null;
+            if ($preferredCourier !== '') {
+                foreach ($couriers as $c) {
+                    if (strcasecmp($c->type, $preferredCourier) === 0) {
+                        $defaultCourier = $c;
+                        break;
+                    }
+                }
+            }
             $defaultCarrier = match ($defaultCourier?->type) {
                 'evri'        => 'HERMES',
                 'royalmail'   => 'ROYAL_MAIL',
@@ -1573,6 +1700,71 @@ HTML;
                     echo '<form method="post" action="'
                        . $e($this->url->to('store/admin/orders/ship', ['id' => $order['id']])) . '">';
                     echo $this->request->csrfField();
+                    echo '<div class="table-responsive mb-3"><table class="table table-sm align-middle">'
+                       . '<thead><tr><th>SKU</th><th class="text-end">Ordered</th>'
+                       . '<th class="text-end">Shipped</th><th class="text-end">Ship now</th></tr></thead><tbody>';
+                    foreach ($items as $item) {
+                        $itemId = (int) ($item['id'] ?? 0);
+                        if ($itemId <= 0) {
+                            continue;
+                        }
+                        $oq = max(0, (int) ($item['order_qty'] ?? $item['qty'] ?? 0));
+                        $sq = max(0, (int) ($item['qty_shipped'] ?? 0));
+                        $remain = max(0, $oq - $sq);
+                        echo '<tr>';
+                        echo '<td><code>' . $e((string) ($item['external_sku'] ?? '')) . '</code></td>';
+                        echo '<td class="text-end">' . $oq . '</td>';
+                        echo '<td class="text-end">' . $sq . '</td>';
+                        echo '<td class="text-end"><input type="number" min="0" max="' . $remain . '"'
+                           . ' class="form-control form-control-sm text-end" style="max-width:5.5rem;margin-left:auto"'
+                           . ' name="ship_qty[' . $itemId . ']" value="' . $remain . '"'
+                           . ($remain <= 0 ? ' disabled' : '') . '></td>';
+                        echo '</tr>';
+                    }
+                    echo '</tbody></table></div>';
+                    if ($serialRequired !== []) {
+                        echo '<div class="alert alert-warning py-2 small">Serial / lot capture required before despatch.</div>';
+                        echo '<div class="table-responsive mb-3"><table class="table table-sm">'
+                           . '<thead><tr><th>SKU</th><th>Serial</th><th>Lot</th></tr></thead><tbody>';
+                        foreach ($serialRequired as $need) {
+                            for ($i = 0; $i < (int) $need['qty']; $i++) {
+                                echo '<tr>';
+                                echo '<td><code>' . $e((string) $need['sku']) . '</code>'
+                                   . '<input type="hidden" name="serial_item_id[]" value="' . (int) $need['item_id'] . '">'
+                                   . '<input type="hidden" name="serial_variant_id[]" value="' . (int) $need['variant_id'] . '">'
+                                   . '</td>';
+                                echo '<td><input class="form-control form-control-sm" name="serial_value[]" required'
+                                   . ' placeholder="Serial #"></td>';
+                                echo '<td><input class="form-control form-control-sm" name="serial_lot[]"'
+                                   . ' placeholder="Lot (opt)"></td>';
+                                echo '</tr>';
+                            }
+                        }
+                        echo '</tbody></table></div>';
+                    }
+                    if ($rateQuotes !== []) {
+                        echo '<div class="mb-3"><div class="small fw-semibold mb-1">Courier rate shop</div>'
+                           . '<div class="table-responsive"><table class="table table-sm mb-2">'
+                           . '<thead><tr><th></th><th>Courier</th><th>Service</th><th class="text-end">Cost</th>'
+                           . '<th>Source</th></tr></thead><tbody>';
+                        foreach ($rateQuotes as $ri => $rate) {
+                            $checked = $ri === 0 ? ' checked' : '';
+                            echo '<tr>';
+                            echo '<td><input type="radio" name="rate_pick" value="'
+                               . $e((string) $rate['courier'] . '|' . (int) $rate['channel_id']) . '"'
+                               . $checked . '></td>';
+                            echo '<td>' . $e((string) $rate['courier']) . '</td>';
+                            echo '<td class="small">' . $e((string) $rate['service']) . '</td>';
+                            echo '<td class="text-end">' . number_format((float) $rate['cost'], 2)
+                               . ' ' . $e((string) $rate['currency']) . '</td>';
+                            echo '<td class="small">' . $e((string) $rate['source']) . '</td>';
+                            echo '</tr>';
+                        }
+                        echo '</tbody></table></div>'
+                           . '<button type="submit" formaction="'
+                           . $e($this->url->to('store/admin/orders/prefer-courier', ['id' => (int) $order['id']]))
+                           . '" class="btn btn-outline-secondary btn-sm mb-2">Save preferred courier</button></div>';
+                    }
                     if ($hasCourier) {
                         echo '<div class="form-check mb-2">'
                            . '<input class="form-check-input" type="checkbox" name="create_courier_label" value="1"'
@@ -1599,7 +1791,7 @@ HTML;
                        . ($hasCourier ? 'Leave blank to use courier tracking' : 'Tracking / consignment number')
                        . '" value="' . $e($tracking) . '"></div>';
                     echo '<div class="col-md-3"><button type="submit" class="btn btn-primary w-100">'
-                       . '<i class="bi bi-truck me-1"></i>Mark shipped</button></div>';
+                       . '<i class="bi bi-truck me-1"></i>Ship selected</button></div>';
                     echo '</div>';
                     if ($hasCourier) {
                         $carrierMap = [];
@@ -1710,8 +1902,14 @@ HTML;
                     echo '<td class="text-end text-nowrap">' . number_format((float) $rr['refund_amount'], 2)
                        . ' ' . $e((string) $rr['currency']) . '</td>';
                     echo '<td class="small text-nowrap">' . $e((string) $rr['created_at']) . '</td>';
-                    echo '<td class="text-end"><a class="btn btn-sm btn-outline-secondary" href="'
-                       . $e($this->url->to('store/admin/returns/view', ['id' => $rid])) . '">Open</a></td>';
+                    echo '<td class="text-end text-nowrap">'
+                       . '<a class="btn btn-sm btn-outline-secondary" href="'
+                       . $e($this->url->to('store/admin/returns/view', ['id' => $rid])) . '">Open</a> '
+                       . '<a class="btn btn-sm btn-outline-primary" target="_blank" href="'
+                       . $e($this->url->to('store/admin/orders/credit-note', [
+                           'id' => (int) $order['id'],
+                           'return_id' => $rid,
+                       ])) . '">Credit note</a></td>';
                     echo '</tr>';
                 }
                 echo '</tbody></table></div>';
@@ -1927,6 +2125,20 @@ HTML;
             || (string) $this->request->post('create_evri_label', 'string', '') === '1';
         $courierChannelId = (int) $this->request->post('courier_channel_id', 'int', 0);
 
+        $ratePick = trim((string) $this->request->post('rate_pick', 'string', ''));
+        if ($ratePick !== '' && str_contains($ratePick, '|')) {
+            [$prefType, $prefCh] = array_pad(explode('|', $ratePick, 2), 2, '');
+            if ($prefType !== '') {
+                $this->db->update('store_orders', [
+                    'preferred_courier' => mb_substr($prefType, 0, 32),
+                ], ['id' => $id]);
+                $order['preferred_courier'] = $prefType;
+            }
+            if ($courierChannelId <= 0 && (int) $prefCh > 0) {
+                $courierChannelId = (int) $prefCh;
+            }
+        }
+
         foreach ($items as $item) {
             if (trim((string) ($item['external_line_item_id'] ?? '')) === '') {
                 $this->notify->error('Missing channel line item IDs. Sync orders again, then retry.');
@@ -1943,10 +2155,15 @@ HTML;
                     $this->factory,
                     new ShipmentRepository($this->db),
                     BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                    $this->db,
                 );
                 $courierChannel = $courierChannelId > 0
                     ? $this->channels->find($courierChannelId)
-                    : $courierSvc->findDefaultCourierChannel();
+                    : $courierSvc->findDefaultCourierChannel(
+                        trim((string) ($order['preferred_courier'] ?? '')) !== ''
+                            ? [(string) $order['preferred_courier']]
+                            : null
+                    );
                 $created  = $courierSvc->createCourierShipment($order, $items, $courierChannel);
                 $tracking = $created['tracking_number'];
                 $carrier  = $created['carrier_code'];
@@ -1961,13 +2178,45 @@ HTML;
                 return;
             }
 
-            $despatch = new OrderDespatchService($this->db, $this->channels, $this->factory);
-            $result   = $despatch->despatchOrder($order, $items, $tracking, $carrier);
+            $shipQtyRaw = $this->request->post('ship_qty', 'raw', []);
+            $shipQtys = null;
+            if (is_array($shipQtyRaw) && $shipQtyRaw !== []) {
+                $shipQtys = [];
+                foreach ($shipQtyRaw as $itemId => $rawQty) {
+                    $shipQtys[(int) $itemId] = max(0, (int) $rawQty);
+                }
+            }
 
+            $serials = [];
+            $serialItemIds = (array) $this->request->post('serial_item_id', 'raw', []);
+            $serialValues = (array) $this->request->post('serial_value', 'raw', []);
+            $serialLots = (array) $this->request->post('serial_lot', 'raw', []);
+            $serialVids = (array) $this->request->post('serial_variant_id', 'raw', []);
+            foreach ($serialItemIds as $idx => $itemId) {
+                $serials[] = [
+                    'order_item_id' => (int) $itemId,
+                    'variant_id'    => (int) ($serialVids[$idx] ?? 0),
+                    'serial'        => trim((string) ($serialValues[$idx] ?? '')),
+                    'lot'           => trim((string) ($serialLots[$idx] ?? '')),
+                ];
+            }
+
+            $despatch = new OrderDespatchService($this->db, $this->channels, $this->factory);
+            $result   = $despatch->despatchOrder(
+                $order,
+                $items,
+                $tracking,
+                $carrier,
+                false,
+                $shipQtys,
+                $serials !== [] ? $serials : null
+            );
+
+            $statusNote = ' Status: ' . (string) ($result['status'] ?? '');
             if (!empty($result['notified'])) {
-                $this->notify->success('Order marked as shipped on the channel.' . $labelNote);
+                $this->notify->success('Order shipped on the channel.' . $labelNote . $statusNote);
             } else {
-                $msg = 'Order marked fulfilled locally.' . $labelNote;
+                $msg = 'Order updated locally.' . $labelNote . $statusNote;
                 if (!empty($result['skipped_reason'])) {
                     $msg .= ' ' . $result['skipped_reason'];
                 }
@@ -1977,6 +2226,7 @@ HTML;
                 'carrier_code'    => $carrier,
                 'tracking_number' => $tracking,
                 'notified'        => !empty($result['notified']),
+                'status'          => $result['status'] ?? '',
             ]);
         } catch (\Throwable $e) {
             $this->notify->error('Ship failed: ' . $e->getMessage());
@@ -2139,17 +2389,27 @@ HTML;
     // Evri label PDF
     // =========================================================================
 
-    public function labelAction(): void
+    public function syncTrackingAction(): void
     {
         $id = (int) $this->request->get('id', 'int', 0);
-        $data = $this->orders->find($id);
-        if ($data === null) {
-            throw new NotFoundException('Order not found.');
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
         }
 
         $shipRepo = new ShipmentRepository($this->db);
-        $shipment = $shipRepo->findLatestForOrder($id);
-        if ($shipment === null) {
+        $shipmentId = (int) $this->request->post('shipment_id', 'int', 0);
+        $shipment = $shipmentId > 0
+            ? $shipRepo->find($shipmentId)
+            : $shipRepo->findLatestForOrder($id);
+        if ($shipment === null || (int) ($shipment['order_id'] ?? 0) !== $id) {
             $this->notify->error('No courier shipment for this order.');
             redirect_to('store/admin/orders/view', ['id' => $id]);
             return;
@@ -2161,6 +2421,145 @@ HTML;
                 $this->factory,
                 $shipRepo,
                 BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                $this->db,
+            );
+            $result = $courier->pollTracking($shipment);
+            try {
+                (new SyncLogRepository($this->db))->log(
+                    (int) ($shipment['courier_channel_id'] ?? 0),
+                    'tracking_poll',
+                    'ok',
+                    'Order #' . $id . ' shipment → ' . ($result['status'] ?? ''),
+                    ['order_id' => $id, 'shipment_id' => (int) $shipment['id'], 'status' => $result['status'] ?? ''],
+                    $this->auth->id(),
+                    '',
+                );
+            } catch (\Throwable) {
+            }
+            $this->notify->success('Tracking updated: ' . (string) ($result['status'] ?? 'created'));
+        } catch (\Throwable $e) {
+            $this->notify->error('Tracking sync failed: ' . $e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => $id]);
+    }
+
+    public function voidLabelAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+
+        $shipRepo = new ShipmentRepository($this->db);
+        $shipmentId = (int) $this->request->post('shipment_id', 'int', 0);
+        $shipment = $shipmentId > 0
+            ? $shipRepo->find($shipmentId)
+            : $shipRepo->findLatestForOrder($id);
+        if ($shipment === null || (int) ($shipment['order_id'] ?? 0) !== $id) {
+            $this->notify->error('Shipment not found.');
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+
+        try {
+            $courier = new CourierShipmentService(
+                $this->channels,
+                $this->factory,
+                $shipRepo,
+                BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                $this->db,
+            );
+            $result = $courier->voidShipment($shipment);
+            $this->notify->success(
+                'Label voided' . (!empty($result['remote']) ? ' (courier notified).' : ' locally.')
+            );
+            $this->logOrderAudit($id, 'void_label', 'Voided shipment #' . (int) $shipment['id'], [
+                'shipment_id' => (int) $shipment['id'],
+                'remote'      => !empty($result['remote']),
+            ]);
+        } catch (\Throwable $e) {
+            $this->notify->error('Void failed: ' . $e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => $id]);
+    }
+
+    public function recreateLabelAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+
+        $data = $this->orders->find($id);
+        if ($data === null) {
+            throw new NotFoundException('Order not found.');
+        }
+
+        try {
+            $shipRepo = new ShipmentRepository($this->db);
+            $courier = new CourierShipmentService(
+                $this->channels,
+                $this->factory,
+                $shipRepo,
+                BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                $this->db,
+            );
+            $created = $courier->recreateLabels($data['order'], $data['items']);
+            $this->notify->success(
+                'Labels recreated (' . (int) ($created['parcel_count'] ?? 1) . ' parcel(s)).'
+            );
+            $this->logOrderAudit($id, 'recreate_label', 'Recreated courier labels', [
+                'parcel_count' => (int) ($created['parcel_count'] ?? 1),
+                'tracking'     => (string) ($created['tracking_number'] ?? ''),
+            ]);
+        } catch (\Throwable $e) {
+            $this->notify->error('Recreate failed: ' . $e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => $id]);
+    }
+
+    public function labelAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        $data = $this->orders->find($id);
+        if ($data === null) {
+            throw new NotFoundException('Order not found.');
+        }
+
+        $shipRepo = new ShipmentRepository($this->db);
+        $shipmentId = (int) $this->request->get('shipment_id', 'int', 0);
+        $shipment = $shipmentId > 0
+            ? $shipRepo->find($shipmentId)
+            : $shipRepo->findLatestForOrder($id);
+        if ($shipment === null || (int) ($shipment['order_id'] ?? 0) !== $id) {
+            $this->notify->error('No courier shipment for this order.');
+            redirect_to('store/admin/orders/view', ['id' => $id]);
+            return;
+        }
+
+        try {
+            $courier = new CourierShipmentService(
+                $this->channels,
+                $this->factory,
+                $shipRepo,
+                BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+                $this->db,
             );
             $rel = $courier->ensureLabelFile($shipment);
         } catch (\Throwable $e) {
@@ -2193,6 +2592,181 @@ HTML;
     // Invoice print (when Create Invoice Printing is on)
     // =========================================================================
 
+    public function cancelChannelAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+            $id = (int) $this->request->get('id', 'int', 0);
+            $svc = new OrderChannelActionService(
+                $this->db,
+                $this->channels,
+                $this->factory,
+                $this->orders,
+                new SyncLogRepository($this->db),
+                new OrderAuditRepository($this->db),
+            );
+            $r = $svc->cancelOnChannelAndLocal(
+                $id,
+                $this->auth->id(),
+                $this->currentOrderAuditUserLabel()
+            );
+            $msg = 'Order cancelled locally.';
+            if (($r['channel'] ?? '') === 'ok') {
+                $msg = 'Cancelled on channel and locally.';
+            } elseif (!empty($r['skipped'])) {
+                $msg .= ' ' . $r['skipped'];
+            }
+            $this->notify->success($msg);
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => (int) $this->request->get('id', 'int', 0)]);
+    }
+
+    public function refundAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+            $id = (int) $this->request->get('id', 'int', 0);
+            $svc = new OrderChannelActionService(
+                $this->db,
+                $this->channels,
+                $this->factory,
+                $this->orders,
+                new SyncLogRepository($this->db),
+                new OrderAuditRepository($this->db),
+            );
+            $r = $svc->issueRefund(
+                $id,
+                (float) $this->request->post('amount', 'float', 0),
+                (string) $this->request->post('currency', 'string', 'GBP'),
+                (string) $this->request->post('comments', 'string', ''),
+                trim((string) $this->request->post('return_id', 'string', '')) ?: null,
+                $this->auth->id(),
+                $this->currentOrderAuditUserLabel()
+            );
+            if (($r['status'] ?? '') === 'ok') {
+                $this->notify->success('Refund issued on channel.');
+            } else {
+                $this->notify->warning((string) ($r['skipped'] ?? 'Refund skipped.'));
+            }
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => (int) $this->request->get('id', 'int', 0)]);
+    }
+
+    public function preferCourierAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/orders');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+            $id = (int) $this->request->get('id', 'int', 0);
+            if ($this->orders->find($id) === null) {
+                throw new NotFoundException('Order not found.');
+            }
+            $ratePick = trim((string) $this->request->post('rate_pick', 'string', ''));
+            $pref = '';
+            $channelId = 0;
+            if ($ratePick !== '' && str_contains($ratePick, '|')) {
+                [$pref, $channelId] = array_pad(explode('|', $ratePick, 2), 2, '');
+                $channelId = (int) $channelId;
+            }
+            $this->db->update('store_orders', [
+                'preferred_courier' => mb_substr(trim($pref), 0, 32),
+            ], ['id' => $id]);
+            $this->logOrderAudit($id, 'prefer_courier', 'Preferred courier set to ' . $pref, [
+                'preferred_courier' => $pref,
+                'courier_channel_id' => $channelId,
+            ]);
+            $this->notify->success('Preferred courier saved.');
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/orders/view', ['id' => (int) $this->request->get('id', 'int', 0)]);
+    }
+
+    public function creditNoteAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        $returnId = (int) $this->request->get('return_id', 'int', 0);
+        $data = $this->orders->find($id);
+        if ($data === null) {
+            throw new NotFoundException('Order not found.');
+        }
+        $order = $data['order'];
+        $items = $data['items'];
+        $ret = null;
+        if ($returnId > 0) {
+            try {
+                $ret = (new ReturnRepository($this->db))->find($returnId);
+            } catch (\Throwable) {
+            }
+        }
+        $customers = new CustomerRepository($this->db);
+        $customer = null;
+        $email = trim((string) ($order['buyer_email'] ?? ''));
+        if ($email !== '') {
+            $customer = $customers->findByEmail($email);
+        }
+        $addr = json_decode((string) ($order['shipping_address'] ?? ''), true) ?: [];
+        $amount = $ret !== null ? (float) ($ret['refund_amount'] ?? 0) : (float) ($order['total'] ?? 0);
+        $currency = (string) (($ret['currency'] ?? null) ?: ($order['currency'] ?? 'GBP'));
+
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Credit note '
+           . htmlspecialchars((string) $order['external_order_id']) . '</title>';
+        echo '<style>
+body{font-family:system-ui,sans-serif;margin:2rem;color:#111}
+h1{font-size:1.4rem;margin:0 0 .5rem}
+table{width:100%;border-collapse:collapse;margin-top:1rem}
+th,td{border-bottom:1px solid #ddd;padding:.5rem;text-align:left}
+.meta{color:#555;font-size:.9rem}.tot{font-weight:700;font-size:1.1rem;margin-top:1rem}
+@media print{button{display:none}}
+</style></head><body>';
+        echo '<button onclick="window.print()">Print</button>';
+        echo '<h1>Credit note</h1>';
+        echo '<div class="meta">Order <strong>'
+           . htmlspecialchars((string) $order['external_order_id']) . '</strong>';
+        if ($returnId > 0) {
+            echo ' · Return #' . $returnId;
+        }
+        echo ' · ' . htmlspecialchars((string) ($order['created_at'] ?? '')) . '</div>';
+        if ($customer !== null && trim((string) ($customer['vat_number'] ?? '')) !== '') {
+            echo '<div class="meta">Customer VAT: '
+               . htmlspecialchars((string) $customer['vat_number']) . '</div>';
+        }
+        echo '<p><strong>Bill to</strong><br>'
+           . htmlspecialchars((string) ($order['shipping_name'] ?? '')) . '<br>'
+           . htmlspecialchars((string) ($addr['addressLine1'] ?? '')) . '</p>';
+        if ($ret !== null) {
+            echo '<p class="meta">Reason: ' . htmlspecialchars((string) ($ret['reason'] ?? '')) . '</p>';
+        }
+        echo '<table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Price</th></tr></thead><tbody>';
+        foreach ($items as $item) {
+            echo '<tr><td>' . htmlspecialchars((string) ($item['external_sku'] ?? '')) . '</td>'
+               . '<td>' . htmlspecialchars((string) ($item['title'] ?? '')) . '</td>'
+               . '<td>' . (int) ($item['qty'] ?? 1) . '</td>'
+               . '<td>' . number_format((float) ($item['price'] ?? 0), 2) . '</td></tr>';
+        }
+        echo '</tbody></table>';
+        echo '<div class="tot">Credit '
+           . number_format($amount, 2) . ' ' . htmlspecialchars($currency) . '</div>';
+        echo '</body></html>';
+        exit;
+    }
+
     public function invoiceAction(): void
     {
         $id = (int) $this->request->get('id', 'int', 0);
@@ -2212,6 +2786,57 @@ HTML;
         }
 
         $addr = json_decode((string) ($order['shipping_address'] ?? ''), true) ?: [];
+        $customers = new CustomerRepository($this->db);
+        $customer = null;
+        $email = trim((string) ($order['buyer_email'] ?? ''));
+        $buyer = trim((string) ($order['buyer_username'] ?? ''));
+        if ($buyer !== '') {
+            $customer = $customers->findByReference($buyer);
+        }
+        if ($customer === null && $email !== '') {
+            $customer = $customers->findByEmail($email);
+        }
+
+        $channelVat = (float) ($channel->settings['vat_rate'] ?? $channel->settings['default_vat_rate'] ?? 20);
+        $netTotal = 0.0;
+        $vatTotal = 0.0;
+        $lineRows = [];
+        foreach ($items as $item) {
+            $qty = max(1, (int) ($item['qty'] ?? 1));
+            $unit = (float) ($item['price'] ?? 0);
+            $taxClass = trim((string) ($item['tax_class'] ?? ''));
+            $includesVat = !empty($item['price_includes_vat']);
+            if ($taxClass === '' && !empty($item['product_id'])) {
+                $prow = $this->db->query(
+                    'SELECT `tax_class`, `price_includes_vat` FROM `#__store_products` WHERE `id` = ? LIMIT 1',
+                    [(int) $item['product_id']]
+                )->row;
+                if ($prow !== []) {
+                    $taxClass = (string) ($prow['tax_class'] ?? '20');
+                    $includesVat = !empty($prow['price_includes_vat']);
+                }
+            }
+            $rate = is_numeric($taxClass) ? (float) $taxClass : $channelVat;
+            $lineGross = $unit * $qty;
+            if ($includesVat && $rate > 0) {
+                $lineNet = round($lineGross / (1 + ($rate / 100)), 2);
+                $lineVat = round($lineGross - $lineNet, 2);
+            } else {
+                $lineNet = round($lineGross, 2);
+                $lineVat = round($lineNet * ($rate / 100), 2);
+            }
+            $netTotal += $lineNet;
+            $vatTotal += $lineVat;
+            $lineRows[] = [
+                'sku'   => (string) ($item['external_sku'] ?? ''),
+                'title' => (string) ($item['title'] ?? ''),
+                'qty'   => $qty,
+                'net'   => $lineNet,
+                'vat'   => $lineVat,
+                'rate'  => $rate,
+                'gross' => $lineNet + $lineVat,
+            ];
+        }
 
         header('Content-Type: text/html; charset=utf-8');
         echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice '
@@ -2227,26 +2852,35 @@ th{font-size:.85rem;text-transform:uppercase;color:#555}
 @media print{button{display:none}}
 </style></head><body>';
         echo '<button onclick="window.print()">Print</button>';
-        echo '<h1>Invoice</h1>';
+        echo '<h1>Tax invoice</h1>';
         echo '<div class="meta">Order <strong>'
            . htmlspecialchars((string) $order['external_order_id']) . '</strong> · '
            . htmlspecialchars((string) ($channel->label ?? '')) . ' · '
            . htmlspecialchars((string) $order['created_at']) . '</div>';
+        if ($customer !== null && trim((string) ($customer['vat_number'] ?? '')) !== '') {
+            echo '<div class="meta">Customer VAT number: <strong>'
+               . htmlspecialchars((string) $customer['vat_number']) . '</strong></div>';
+        }
         echo '<p><strong>Ship to</strong><br>'
            . htmlspecialchars((string) $order['shipping_name']) . '<br>'
            . htmlspecialchars((string) ($addr['addressLine1'] ?? '')) . '<br>'
            . htmlspecialchars(trim(($addr['city'] ?? '') . ' ' . ($addr['postalCode'] ?? ''))) . '<br>'
            . htmlspecialchars((string) ($addr['countryCode'] ?? '')) . '</p>';
-        echo '<table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Price</th></tr></thead><tbody>';
-        foreach ($items as $item) {
-            echo '<tr><td>' . htmlspecialchars((string) ($item['external_sku'] ?? '')) . '</td>'
-               . '<td>' . htmlspecialchars((string) ($item['title'] ?? '')) . '</td>'
-               . '<td>' . (int) ($item['qty'] ?? 1) . '</td>'
-               . '<td>' . number_format((float) ($item['price'] ?? 0), 2) . '</td></tr>';
+        echo '<table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Net</th><th>VAT</th><th>Gross</th></tr></thead><tbody>';
+        foreach ($lineRows as $line) {
+            echo '<tr><td>' . htmlspecialchars($line['sku']) . '</td>'
+               . '<td>' . htmlspecialchars($line['title'])
+               . ' <span class="meta">(' . rtrim(rtrim(number_format((float) $line['rate'], 2, '.', ''), '0'), '.') . '%)</span></td>'
+               . '<td>' . (int) $line['qty'] . '</td>'
+               . '<td>' . number_format((float) $line['net'], 2) . '</td>'
+               . '<td>' . number_format((float) $line['vat'], 2) . '</td>'
+               . '<td>' . number_format((float) $line['gross'], 2) . '</td></tr>';
         }
         echo '</tbody></table>';
+        echo '<div class="meta">Net ' . number_format($netTotal, 2)
+           . ' · VAT ' . number_format($vatTotal, 2) . '</div>';
         echo '<div class="tot">Total '
-           . number_format((float) $order['total'], 2) . ' '
+           . number_format($netTotal + $vatTotal, 2) . ' '
            . htmlspecialchars((string) $order['currency']) . '</div>';
         if ((float) ($order['channel_fee'] ?? 0) > 0) {
             echo '<div class="meta">Channel fee: '

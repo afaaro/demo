@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/helpers/functions.php';
 
+use Module\Livestream\Services\MediaMtxClient;
 use System\Engine\Controller;
 use System\Engine\Exception\NotFoundException;
 
@@ -34,10 +35,7 @@ class LivestreamHls extends Controller
         }
 
         $cfg = livestream_config();
-        $upstreamBase = rtrim((string) ($cfg['hls_proxy_upstream'] ?? ''), '/');
-        if ($upstreamBase === '') {
-            $upstreamBase = rtrim((string) ($cfg['hls_public_base'] ?? ''), '/');
-        }
+        $upstreamBase = livestream_hls_proxy_upstream();
         if ($upstreamBase === '') {
             http_response_code(502);
             header('Content-Type: text/plain; charset=utf-8');
@@ -45,8 +43,21 @@ class LivestreamHls extends Controller
             exit;
         }
 
+        // Avoid MediaMTX CDN spam when the publisher already stopped.
+        if ($this->pathDefinitelyOffline($slug)) {
+            http_response_code(404);
+            header('Content-Type: text/plain; charset=utf-8');
+            header('Cache-Control: no-store');
+            echo 'Stream offline';
+            exit;
+        }
+
         $publicBase = rtrim((string) ($cfg['hls_public_base'] ?? $upstreamBase), '/');
         $upstream = $upstreamBase . '/' . rawurlencode($slug) . '/' . str_replace('%2F', '', rawurlencode($file));
+        $session = trim((string) ($_GET['session'] ?? ''));
+        if ($session !== '' && preg_match('/^[A-Za-z0-9_-]{1,80}$/', $session)) {
+            $upstream .= '?session=' . rawurlencode($session);
+        }
         $result = $this->fetchUpstream($upstream);
         if ($result === null) {
             http_response_code(502);
@@ -88,6 +99,24 @@ class LivestreamHls extends Controller
         header('Access-Control-Allow-Methods: GET, OPTIONS');
         echo $body;
         exit;
+    }
+
+    /** True when local MediaMTX API says this path is not publishing. */
+    private function pathDefinitelyOffline(string $slug): bool
+    {
+        $api = trim((string) (livestream_config()['mediamtx_api'] ?? ''));
+        if ($api === '') {
+            return false;
+        }
+        try {
+            $client = new MediaMtxClient($api);
+            if (!$client->isReachable()) {
+                return false;
+            }
+            return !$client->isPathOnline($slug);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -202,19 +231,46 @@ class LivestreamHls extends Controller
     /** @param list<string> $prefixes */
     private function mapUri(string $uri, string $slug, array $prefixes): string
     {
-        if (str_starts_with($uri, 'http://') || str_starts_with($uri, 'https://')) {
+        $query = '';
+        $path = $uri;
+        $qPos = strpos($uri, '?');
+        if ($qPos !== false) {
+            $path = substr($uri, 0, $qPos);
+            $query = substr($uri, $qPos + 1);
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
             foreach ($prefixes as $prefix) {
-                if ($prefix !== '' && str_starts_with($uri, $prefix)) {
-                    $file = rawurldecode(substr($uri, strlen($prefix)));
+                if ($prefix !== '' && str_starts_with($path, $prefix)) {
+                    $file = rawurldecode(substr($path, strlen($prefix)));
                     if (preg_match('/^[A-Za-z0-9._-]+$/', $file)) {
-                        return livestream_hls_proxy_url($slug, $file);
+                        return $this->proxyUri($slug, $file, $query);
                     }
                 }
             }
             return $uri;
         }
 
+        $file = rawurldecode(ltrim($path, '/'));
+        if (preg_match('/^[A-Za-z0-9._-]+$/', $file)) {
+            return $this->proxyUri($slug, $file, $query);
+        }
+
         return $uri;
+    }
+
+    private function proxyUri(string $slug, string $file, string $query): string
+    {
+        $url = livestream_hls_proxy_url($slug, $file);
+        if ($query === '') {
+            return $url;
+        }
+        parse_str($query, $parts);
+        $session = trim((string) ($parts['session'] ?? ''));
+        if ($session === '' || !preg_match('/^[A-Za-z0-9_-]{1,80}$/', $session)) {
+            return $url;
+        }
+        return $url . (str_contains($url, '?') ? '&' : '?') . 'session=' . rawurlencode($session);
     }
 
     private function guessType(string $file): string

@@ -56,7 +56,7 @@ final class ListingTemplateRepository
     }
 
     /**
-     * @param array{name?: string, title_template?: string, description_template?: string, is_default?: bool} $data
+     * @param array{name?: string, title_template?: string, description_template?: string, attributes_json?: string, is_default?: bool} $data
      */
     public function create(int $channelId, array $data): ListingTemplate
     {
@@ -78,6 +78,7 @@ final class ListingTemplateRepository
             $description = '{{description}}';
         }
 
+        $attributesJson = $this->encodeAttributes($data['attributes_json'] ?? $data['attributes'] ?? []);
         $isDefault = !empty($data['is_default']);
         $tid = $this->tenantId();
 
@@ -86,6 +87,7 @@ final class ListingTemplateRepository
             $name,
             $title,
             $description,
+            $attributesJson,
             $isDefault,
             $tid,
         ) {
@@ -103,6 +105,7 @@ final class ListingTemplateRepository
                 'name'                 => mb_substr($name, 0, 128),
                 'title_template'       => mb_substr($title, 0, 255),
                 'description_template' => $description,
+                'attributes_json'      => $attributesJson,
                 'is_default'           => $isDefault ? 1 : 0,
             ]);
 
@@ -112,7 +115,7 @@ final class ListingTemplateRepository
     }
 
     /**
-     * @param array{name?: string, title_template?: string, description_template?: string, is_default?: bool} $data
+     * @param array{name?: string, title_template?: string, description_template?: string, attributes_json?: string, is_default?: bool} $data
      */
     public function update(int $id, array $data): ListingTemplate
     {
@@ -142,6 +145,10 @@ final class ListingTemplateRepository
             $description = '{{description}}';
         }
 
+        $attributesJson = array_key_exists('attributes_json', $data) || array_key_exists('attributes', $data)
+            ? $this->encodeAttributes($data['attributes_json'] ?? $data['attributes'] ?? [])
+            : $this->encodeAttributes($existing->attributes);
+
         $isDefault = array_key_exists('is_default', $data)
             ? !empty($data['is_default'])
             : $existing->isDefault;
@@ -154,6 +161,7 @@ final class ListingTemplateRepository
             $name,
             $title,
             $description,
+            $attributesJson,
             $isDefault,
             $tid,
         ) {
@@ -169,6 +177,7 @@ final class ListingTemplateRepository
                 'name'                 => mb_substr($name, 0, 128),
                 'title_template'       => mb_substr($title, 0, 255),
                 'description_template' => $description,
+                'attributes_json'      => $attributesJson,
                 'is_default'           => $isDefault ? 1 : 0,
             ], ['id' => $id, 'tenant_id' => $tid]);
 
@@ -215,9 +224,57 @@ final class ListingTemplateRepository
         $t->name                = (string) $row['name'];
         $t->titleTemplate       = (string) $row['title_template'];
         $t->descriptionTemplate = (string) $row['description_template'];
+        $t->attributes          = $this->decodeAttributes($row['attributes_json'] ?? null);
         $t->isDefault           = !empty($row['is_default']);
         $t->createdAt           = isset($row['created_at']) ? (string) $row['created_at'] : null;
         $t->updatedAt           = isset($row['updated_at']) ? (string) $row['updated_at'] : null;
         return $t;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function decodeAttributes(mixed $raw): array
+    {
+        if (is_array($raw)) {
+            $decoded = $raw;
+        } else {
+            $decoded = json_decode((string) ($raw ?? ''), true);
+            if (!is_array($decoded)) {
+                return [];
+            }
+        }
+        $out = [];
+        foreach ($decoded as $key => $value) {
+            $name = trim((string) $key);
+            if ($name === '' || !is_scalar($value)) {
+                continue;
+            }
+            $out[$name] = (string) $value;
+        }
+        return $out;
+    }
+
+    private function encodeAttributes(mixed $raw): ?string
+    {
+        if (is_string($raw)) {
+            $trimmed = trim($raw);
+            if ($trimmed === '') {
+                return null;
+            }
+            $decoded = json_decode($trimmed, true);
+            if (!is_array($decoded)) {
+                throw new InvalidArgumentException(
+                    'Attribute map must be valid JSON object, e.g. {"product_type":"LUGGAGE","brand":"{{product_name}}"}.'
+                );
+            }
+            $map = $this->decodeAttributes($decoded);
+            return $map === [] ? null : json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        if (is_array($raw)) {
+            $map = $this->decodeAttributes($raw);
+            return $map === [] ? null : json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        return null;
     }
 }

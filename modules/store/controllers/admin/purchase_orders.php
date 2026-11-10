@@ -8,9 +8,12 @@ use Module\Store\Services\CredentialsVault;
 use Module\Store\Services\InventoryService;
 use Module\Store\Services\ListingRepository;
 use Module\Store\Services\PickwaveRepository;
+use Module\Store\Services\AsnRepository;
+use Module\Store\Services\PoReceiveService;
 use Module\Store\Services\ProductRepository;
 use Module\Store\Services\PurchaseOrderRepository;
 use Module\Store\Services\SupplierRepository;
+use Module\Store\Services\SyncLogRepository;
 use Module\Store\Services\VariantRepository;
 use Module\Store\Services\WarehouseRepository;
 use System\Engine\Controller;
@@ -1310,6 +1313,9 @@ class StoreAdminPurchaseOrders extends Controller
         echo $this->poActionsBar($po, $isDraft, $isConfirmed, $openTotal);
         echo $this->poTotalsBar($money);
         echo $this->poProductsSection($po, $lines, $catalog, $pq, $isDraft, $isConfirmed);
+        if ($isConfirmed && $openTotal > 0) {
+            echo $this->poScanReceiveSection($id);
+        }
 
         echo '</div></div>';
 
@@ -1318,7 +1324,259 @@ class StoreAdminPurchaseOrders extends Controller
             JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS
         );
         $this->view->block('scripts', '<script>window.SF_PO_LOOKUPS=' . ($payload ?: '{}') . ';</script>'
-            . $this->poScreenScript());
+            . $this->poScreenScript()
+            . ($isConfirmed && $openTotal > 0 ? $this->poScanScript($id) : ''));
+    }
+
+    private function poScanReceiveSection(int $poId): string
+    {
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+        $html = '<div class="border rounded bg-white p-3 mt-3" id="sf-po-scan">';
+        $html .= '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">';
+        $html .= '<h2 class="h6 text-uppercase text-muted mb-0">Scan to receive</h2>';
+        $html .= '<a class="btn btn-sm btn-outline-secondary" href="'
+            . $this->view->e($this->url->to('store/admin/purchase-orders/asn', ['id' => $poId]))
+            . '">ASN before receive</a></div>';
+        $html .= '<p class="small text-muted mb-3">Scan SKUs to confirm before booking in. Then apply scans to inventory. Compare against ASN when present.</p>';
+        $html .= '<div class="row g-2 align-items-end mb-2">';
+        $html .= '<div class="col-md-4"><label class="form-label small mb-0" for="sf-po-scan-sku">SKU</label>'
+            . '<input type="text" class="form-control form-control-sm" id="sf-po-scan-sku" autocomplete="off"></div>';
+        $html .= '<div class="col-md-2"><label class="form-label small mb-0" for="sf-po-scan-qty">Qty</label>'
+            . '<input type="number" min="1" value="1" class="form-control form-control-sm" id="sf-po-scan-qty"></div>';
+        $html .= '<div class="col-md-2"><button type="button" class="btn btn-sm btn-primary w-100" id="sf-po-scan-btn">Scan</button></div>';
+        $html .= '<div class="col-md-4"><div class="small text-muted" id="sf-po-scan-status">Ready</div></div>';
+        $html .= '</div>';
+        $html .= '<form method="post" action="'
+            . $e($this->url->to('store/admin/purchase-orders/apply-scans', ['id' => $poId])) . '">'
+            . $this->request->csrfField()
+            . '<button type="submit" class="btn btn-sm btn-success"'
+            . ' onclick="return confirm(\'Book in scanned quantities?\');">Apply scans &amp; book in</button></form>';
+        $html .= '</div>';
+        return $html;
+    }
+
+    private function poScanScript(int $poId): string
+    {
+        $scanUrl = $this->url->to('store/admin/purchase-orders/scan', ['id' => $poId]);
+        $csrf = $this->request->csrfToken();
+        $scanUrlJson = json_encode($scanUrl);
+        $csrfJson = json_encode($csrf);
+        return <<<HTML
+<script>
+(function () {
+  const statusEl = document.getElementById('sf-po-scan-status');
+  const skuEl = document.getElementById('sf-po-scan-sku');
+  const qtyEl = document.getElementById('sf-po-scan-qty');
+  const btn = document.getElementById('sf-po-scan-btn');
+  const scanUrl = {$scanUrlJson};
+  const csrf = {$csrfJson};
+  let busy = false;
+  function doScan() {
+    if (busy || !skuEl || !statusEl) return;
+    const raw = (skuEl.value || '').trim();
+    const qty = Math.max(1, parseInt((qtyEl && qtyEl.value) || '1', 10) || 1);
+    if (!raw) { statusEl.textContent = 'Enter a SKU'; statusEl.className = 'small text-danger'; return; }
+    busy = true;
+    statusEl.textContent = 'Saving…';
+    statusEl.className = 'small text-muted';
+    const body = new FormData();
+    body.append('sku', raw);
+    body.append('qty', String(qty));
+    body.append('_token', csrf);
+    fetch(scanUrl, { method: 'POST', body: body, credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.j || !res.j.ok) throw new Error((res.j && res.j.error) ? res.j.error : 'Scan failed');
+        const prog = res.j.progress || {};
+        statusEl.textContent = 'Scanned ' + raw + ' · ' + (prog.scanned || 0) + '/' + (prog.needed || 0);
+        statusEl.className = 'small text-success';
+        skuEl.value = '';
+        if (qtyEl) qtyEl.value = '1';
+        skuEl.focus();
+      })
+      .catch(function (err) {
+        statusEl.textContent = err.message || 'Scan failed';
+        statusEl.className = 'small text-danger';
+        skuEl.select();
+      })
+      .finally(function () { busy = false; });
+  }
+  if (btn) btn.addEventListener('click', doScan);
+  if (skuEl) skuEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); doScan(); }
+  });
+})();
+</script>
+HTML;
+    }
+
+    public function scanAction(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        if (!$this->request->isPost()) {
+            http_response_code(405);
+            echo json_encode(['ok' => false, 'error' => 'POST required']);
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'Session expired']);
+            return;
+        }
+        $id = (int) $this->request->get('id', 'int', 0);
+        $sku = trim((string) $this->request->post('sku', 'string', ''));
+        $qty = max(1, (int) $this->request->post('qty', 'int', 1));
+        try {
+            $svc = new PoReceiveService($this->db, $this->orders);
+            $uid = (int) ($this->auth->id() ?? 0) ?: null;
+            $svc->recordScan($id, $sku, $qty, $uid);
+            echo json_encode([
+                'ok'       => true,
+                'totals'   => $svc->scanTotals($id),
+                'progress' => $svc->scanProgress($id),
+            ]);
+        } catch (\Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function applyScansAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/purchase-orders');
+            return;
+        }
+        $id = (int) $this->request->get('id', 'int', 0);
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/purchase-orders/view', ['id' => $id]);
+            return;
+        }
+        try {
+            $svc = new PoReceiveService($this->db, $this->orders);
+            $received = $svc->applyReceivedFromScans($id);
+            foreach ($received as $row) {
+                $vid = (int) ($row['variant_id'] ?? 0);
+                $qty = (int) ($row['qty'] ?? 0);
+                if ($vid > 0 && $qty > 0) {
+                    $this->inventory->adjust($vid, $qty, 'received', 'PO #' . $id . ' scan book-in', $this->auth->id());
+                }
+            }
+            try {
+                (new SyncLogRepository($this->db))->log(
+                    0,
+                    'po_scan_receive',
+                    'ok',
+                    'Applied PO #' . $id . ' scans (' . count($received) . ' lines)',
+                    ['po_id' => $id, 'lines' => $received],
+                    $this->auth->id(),
+                    '',
+                );
+            } catch (\Throwable) {
+            }
+            $this->notify->success('Booked in ' . count($received) . ' scanned line(s).');
+            // Offer putaway for variants missing a pick bin.
+            $needsBin = [];
+            foreach ($received as $row) {
+                $vid = (int) ($row['variant_id'] ?? 0);
+                if ($vid <= 0) {
+                    continue;
+                }
+                $v = $this->db->query(
+                    "SELECT v.`id`, v.`sku`, v.`pick_bin`, p.`name`
+                       FROM `#__store_product_variants` v
+                       INNER JOIN `#__store_products` p ON p.`id` = v.`product_id`
+                      WHERE v.`id` = ? LIMIT 1",
+                    [$vid]
+                )->row;
+                if ($v !== [] && $v !== null && trim((string) ($v['pick_bin'] ?? '')) === '') {
+                    $needsBin[] = $v;
+                }
+            }
+            if ($needsBin !== []) {
+                $_SESSION['store_po_putaway'] = [
+                    'po_id'    => $id,
+                    'variants' => $needsBin,
+                ];
+                redirect_to('store/admin/purchase-orders/putaway', ['id' => $id]);
+                return;
+            }
+        } catch (\Throwable $ex) {
+            $this->notify->error($ex->getMessage());
+        }
+        redirect_to('store/admin/purchase-orders/view', ['id' => $id]);
+    }
+
+    public function putawayAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        $payload = $_SESSION['store_po_putaway'] ?? null;
+        if (!is_array($payload) || (int) ($payload['po_id'] ?? 0) !== $id) {
+            $this->notify->error('No putaway queue for this PO.');
+            redirect_to('store/admin/purchase-orders/view', ['id' => $id]);
+            return;
+        }
+
+        if ($this->request->isPost()) {
+            try {
+                $this->request->checkToken();
+                $bins = $this->request->post('pick_bin', 'raw', []);
+                if (!is_array($bins)) {
+                    $bins = [];
+                }
+                $saved = 0;
+                foreach ($bins as $vid => $bin) {
+                    $vid = (int) $vid;
+                    $bin = trim((string) $bin);
+                    if ($vid <= 0 || $bin === '') {
+                        continue;
+                    }
+                    $this->inventory->setPickBin($vid, $bin);
+                    $saved++;
+                }
+                unset($_SESSION['store_po_putaway']);
+                $this->notify->success('Saved pick bin for ' . $saved . ' variant(s).');
+                redirect_to('store/admin/purchase-orders/view', ['id' => $id]);
+                return;
+            } catch (\Throwable $e) {
+                $this->notify->error($e->getMessage());
+            }
+        }
+
+        $variants = is_array($payload['variants'] ?? null) ? $payload['variants'] : [];
+        echo $this->view->inline(function () use ($id, $variants) {
+            $this->view->assign('title', 'PO putaway');
+            $this->view->block('right_sidebar', 'Deliveries');
+            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+            echo '<h1 class="h3 mb-2">Putaway / bin on receive</h1>';
+            echo '<p class="text-muted small">PO #' . (int) $id
+               . ' — set pick bins for newly received SKUs with empty locations.</p>';
+            echo '<form method="post" action="'
+               . $e($this->url->to('store/admin/purchase-orders/putaway', ['id' => $id])) . '">';
+            echo $this->request->csrfField();
+            echo '<div class="table-responsive"><table class="table table-sm align-middle bg-white border">';
+            echo '<thead class="table-light"><tr><th>SKU</th><th>Product</th><th>Pick bin</th></tr></thead><tbody>';
+            foreach ($variants as $v) {
+                $vid = (int) ($v['id'] ?? 0);
+                echo '<tr>';
+                echo '<td><code>' . $e((string) ($v['sku'] ?? '')) . '</code></td>';
+                echo '<td class="small">' . $e((string) ($v['name'] ?? '')) . '</td>';
+                echo '<td style="max-width:12rem"><input class="form-control form-control-sm" name="pick_bin['
+                   . $vid . ']" placeholder="e.g. A-01-02" required></td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table></div>';
+            echo '<button type="submit" class="btn btn-primary btn-sm">Save bins</button> ';
+            echo '<a class="btn btn-outline-secondary btn-sm" href="'
+               . $e($this->url->to('store/admin/purchase-orders/view', ['id' => $id])) . '">Skip</a>';
+            echo '</form>';
+        });
     }
 
     private function poScreenStyles(): string
@@ -1826,5 +2084,140 @@ JS;
         ];
     }
 
+    public function asnAction(): void
+    {
+        $id = (int) $this->request->get('id', 'int', 0);
+        $po = $this->orders->find($id);
+        if ($po === null) {
+            throw new NotFoundException('Purchase order not found.');
+        }
+        $asns = new AsnRepository($this->db);
+        $lines = $this->orders->lines($id);
+        $existing = $asns->forPo($id);
+        $compare = (new PoReceiveService($this->db, $this->orders))->compareAsn($id);
 
+        if ($this->request->isPost()) {
+            try {
+                $this->request->checkToken();
+                $asnLines = [];
+                $rawQty = (array) $this->request->post('qty_expected', 'raw', []);
+                foreach ($lines as $line) {
+                    $sku = trim((string) ($line['variant_sku'] ?? ''));
+                    $lid = (int) $line['id'];
+                    $qty = (int) ($rawQty[$lid] ?? PurchaseOrderRepository::lineOutstanding($line));
+                    if ($sku !== '' && $qty > 0) {
+                        $asnLines[] = ['sku' => $sku, 'qty_expected' => $qty];
+                    }
+                }
+                $created = $asns->create(
+                    $id,
+                    trim((string) $this->request->post('expected_date', 'string', '')) ?: null,
+                    (int) $this->request->post('pallet_count', 'int', 0),
+                    $asnLines,
+                    (string) $this->request->post('notes', 'string', ''),
+                    (string) $this->request->post('status', 'string', 'draft')
+                );
+                $this->notify->success('ASN #' . (int) $created['asn']['id'] . ' created.');
+                redirect_to('store/admin/purchase-orders/asn', ['id' => $id]);
+                return;
+            } catch (\Throwable $e) {
+                $this->notify->error($e->getMessage());
+            }
+        }
+
+        echo $this->view->inline(function () use ($po, $lines, $existing, $compare, $id) {
+            $this->view->assign('title', 'ASN for PO #' . $id);
+            $this->view->block('right_sidebar', 'Inventory');
+            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+            echo '<div class="mb-2"><a class="small" href="'
+               . $e($this->url->to('store/admin/purchase-orders/view', ['id' => $id]))
+               . '">&larr; Back to PO</a></div>';
+            echo '<h1 class="h3 mb-3">ASN before receive · PO '
+               . $e((string) ($po['reference'] ?? '#' . $id)) . '</h1>';
+
+            if ($compare['asn_id'] !== null) {
+                echo '<div class="card border-0 shadow-sm mb-3"><div class="card-body">';
+                echo '<h2 class="h6">ASN vs scan receive</h2>';
+                if ($compare['matches'] === []) {
+                    echo '<p class="text-muted small mb-0">No ASN lines to compare.</p>';
+                } else {
+                    echo '<table class="table table-sm mb-0"><thead><tr><th>SKU</th><th class="text-end">Expected</th>'
+                       . '<th class="text-end">Scanned</th><th class="text-end">Delta</th></tr></thead><tbody>';
+                    foreach ($compare['matches'] as $m) {
+                        $cls = ((int) $m['delta'] === 0) ? '' : 'table-warning';
+                        echo '<tr class="' . $cls . '"><td><code>' . $e((string) $m['sku']) . '</code></td>'
+                           . '<td class="text-end">' . (int) $m['expected'] . '</td>'
+                           . '<td class="text-end">' . (int) $m['scanned'] . '</td>'
+                           . '<td class="text-end">' . (int) $m['delta'] . '</td></tr>';
+                    }
+                    echo '</tbody></table>';
+                    echo '<div class="small mt-2">' . ($compare['complete'] ? 'ASN matches scans.' : 'ASN and scans differ.') . '</div>';
+                }
+                echo '</div></div>';
+            }
+
+            if ($existing !== []) {
+                echo '<div class="table-responsive mb-3"><table class="table table-sm bg-white border">'
+                   . '<thead class="table-light"><tr><th>#</th><th>Status</th><th>Expected</th><th>Pallets</th><th>Lines</th></tr></thead><tbody>';
+                foreach ($existing as $asn) {
+                    echo '<tr><td>' . (int) $asn['id'] . '</td><td>' . $e((string) $asn['status']) . '</td>'
+                       . '<td>' . $e((string) ($asn['expected_date'] ?? '—')) . '</td>'
+                       . '<td>' . (int) $asn['pallet_count'] . '</td>'
+                       . '<td>' . (int) ($asn['line_count'] ?? 0) . '</td></tr>';
+                }
+                echo '</tbody></table></div>';
+            }
+
+            echo '<form method="post" class="card border-0 shadow-sm"><div class="card-body">';
+            echo $this->request->csrfField();
+            echo '<h2 class="h6">Create ASN</h2>';
+            echo '<div class="row g-2 mb-3">';
+            echo '<div class="col-md-3"><label class="form-label small">Expected date</label>'
+               . '<input type="date" class="form-control form-control-sm" name="expected_date" value="'
+               . $e((string) ($po['expected_date'] ?? $po['expected_at'] ?? '')) . '"></div>';
+            echo '<div class="col-md-2"><label class="form-label small">Pallets</label>'
+               . '<input type="number" min="0" class="form-control form-control-sm" name="pallet_count" value="1"></div>';
+            echo '<div class="col-md-2"><label class="form-label small">Status</label>'
+               . '<select name="status" class="form-select form-select-sm">'
+               . '<option value="draft">draft</option><option value="submitted" selected>submitted</option></select></div>';
+            echo '<div class="col-md-5"><label class="form-label small">Notes</label>'
+               . '<input class="form-control form-control-sm" name="notes"></div></div>';
+            echo '<table class="table table-sm"><thead><tr><th>SKU</th><th class="text-end">Open</th>'
+               . '<th class="text-end">ASN qty</th></tr></thead><tbody>';
+            foreach ($lines as $line) {
+                $open = PurchaseOrderRepository::lineOutstanding($line);
+                if ($open <= 0) {
+                    continue;
+                }
+                $lid = (int) $line['id'];
+                echo '<tr><td><code>' . $e((string) ($line['variant_sku'] ?? '')) . '</code></td>'
+                   . '<td class="text-end">' . $open . '</td>'
+                   . '<td class="text-end"><input type="number" min="0" class="form-control form-control-sm text-end"'
+                   . ' style="max-width:6rem;margin-left:auto" name="qty_expected[' . $lid . ']" value="'
+                   . $open . '"></td></tr>';
+            }
+            echo '</tbody></table>';
+            echo '<button class="btn btn-primary btn-sm">Create ASN</button>';
+            echo '</div></form>';
+        });
+    }
+
+    public function asnSubmitAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/purchase-orders');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+            $asnId = (int) $this->request->post('asn_id', 'int', 0);
+            (new AsnRepository($this->db))->setStatus($asnId, 'submitted');
+            $this->notify->success('ASN submitted.');
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        $id = (int) $this->request->get('id', 'int', 0);
+        redirect_to('store/admin/purchase-orders/asn', ['id' => $id]);
+    }
 }

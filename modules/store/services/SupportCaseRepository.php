@@ -14,12 +14,16 @@ final class SupportCaseRepository
     /**
      * @return array<int, array<string, mixed>>
      */
+    /**
+     * @param array{assigned_user_id?: int, assignment?: string, mine_user_id?: int} $filters
+     */
     public function paginate(
         int $channelId,
         int $limit = 25,
         int $offset = 0,
         string $status = '',
         string $kind = '',
+        array $filters = [],
     ): array {
         if (!TenantContext::get()->has()) {
             return [];
@@ -35,6 +39,9 @@ final class SupportCaseRepository
             $sql .= " AND `kind` = ?";
             $params[] = $kind;
         }
+        [$extra, $extraParams] = $this->assignmentFilterSql($filters);
+        $sql .= $extra;
+        $params = array_merge($params, $extraParams);
         $sql .= " ORDER BY COALESCE(`last_modified_date`, `creation_date`) DESC, `id` DESC LIMIT ? OFFSET ?";
         $params[] = $limit;
         $params[] = $offset;
@@ -42,7 +49,10 @@ final class SupportCaseRepository
         return $this->db->query($sql, $params)->rows;
     }
 
-    public function count(int $channelId, string $status = '', string $kind = ''): int
+    /**
+     * @param array{assigned_user_id?: int, assignment?: string, mine_user_id?: int} $filters
+     */
+    public function count(int $channelId, string $status = '', string $kind = '', array $filters = []): int
     {
         if (!TenantContext::get()->has()) {
             return 0;
@@ -58,7 +68,89 @@ final class SupportCaseRepository
             $sql .= " AND `kind` = ?";
             $params[] = $kind;
         }
+        [$extra, $extraParams] = $this->assignmentFilterSql($filters);
+        $sql .= $extra;
+        $params = array_merge($params, $extraParams);
         return (int) $this->db->query($sql, $params)->value;
+    }
+
+    public function setAssignee(int $caseId, ?int $userId): void
+    {
+        if ($caseId <= 0 || !TenantContext::get()->has()) {
+            return;
+        }
+        try {
+            $this->db->query(
+                "UPDATE `#__store_support_cases`
+                    SET `assigned_user_id` = ?
+                  WHERE `id` = ? AND `tenant_id` = ?",
+                [$userId !== null && $userId > 0 ? $userId : null, $caseId, $this->tenantId()]
+            );
+        } catch (\Throwable) {
+            // Column may be missing until migration runs.
+        }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function overdueCases(int $limit = 50): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        try {
+            return $this->db->query(
+                "SELECT sc.*, c.`label` AS channel_label
+                   FROM `#__store_support_cases` sc
+                   LEFT JOIN `#__store_channels` c
+                     ON c.`id` = sc.`channel_id` AND c.`tenant_id` = sc.`tenant_id`
+                  WHERE sc.`tenant_id` = ?
+                    AND sc.`seller_response_due` IS NOT NULL
+                    AND sc.`seller_response_due` < NOW()
+                    AND UPPER(sc.`status`) NOT IN (
+                        'CLOSED','CS_CLOSED','OTHER','CLOSED_WITH_ESCALATION',
+                        'APPROVED','COMPLETED','REFUNDED','DENIED','CANCELLED','CANCELED',
+                        'POSTED','REIMBURSED','RECEIVED','RESOLVED'
+                    )
+                  ORDER BY sc.`seller_response_due` ASC
+                  LIMIT ?",
+                [$this->tenantId(), $limit]
+            )->rows;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @param array{assigned_user_id?: int, assignment?: string, mine_user_id?: int} $filters
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private function assignmentFilterSql(array $filters): array
+    {
+        $extra = '';
+        $params = [];
+        $assignment = strtolower(trim((string) ($filters['assignment'] ?? '')));
+        if ($assignment === 'unassigned') {
+            $extra .= ' AND (`assigned_user_id` IS NULL OR `assigned_user_id` = 0)';
+        } elseif ($assignment === 'assigned') {
+            $extra .= ' AND `assigned_user_id` IS NOT NULL AND `assigned_user_id` > 0';
+        } elseif ($assignment === 'mine') {
+            $uid = (int) ($filters['mine_user_id'] ?? $filters['assigned_user_id'] ?? 0);
+            if ($uid > 0) {
+                $extra .= ' AND `assigned_user_id` = ?';
+                $params[] = $uid;
+            }
+        } elseif ($assignment === 'overdue') {
+            $extra .= ' AND `seller_response_due` IS NOT NULL AND `seller_response_due` < NOW()';
+        }
+        $assignedUserId = (int) ($filters['assigned_user_id'] ?? 0);
+        if ($assignedUserId > 0 && $assignment !== 'mine') {
+            $extra .= ' AND `assigned_user_id` = ?';
+            $params[] = $assignedUserId;
+        }
+        return [$extra, $params];
     }
 
     public function countOpen(int $channelId): int

@@ -34,6 +34,7 @@ class StoreAdminCustomers extends Controller
             'city'      => trim((string) $this->request->get('f_city', 'string', '')),
             'postcode'  => trim((string) $this->request->get('f_postcode', 'string', '')),
             'email'     => trim((string) $this->request->get('f_email', 'string', '')),
+            'tag'       => trim((string) $this->request->get('f_tag', 'string', '')),
         ];
         $sort = (string) $this->request->get('sort', 'string', 'created');
         $dir = strtolower((string) $this->request->get('dir', 'string', 'desc')) === 'asc' ? 'asc' : 'desc';
@@ -54,6 +55,7 @@ class StoreAdminCustomers extends Controller
                 'f_city'      => $filters['city'],
                 'f_postcode'  => $filters['postcode'],
                 'f_email'     => $filters['email'],
+                'f_tag'       => $filters['tag'],
                 'sort'        => $sort,
                 'dir'         => $dir,
             ],
@@ -156,6 +158,8 @@ class StoreAdminCustomers extends Controller
                . ' onclick="return sfCustBulk(this)">Export</button>';
             echo '</div>';
             echo '<div class="sf-cust-meta">';
+            echo '<input type="text" class="sf-cust-tool" name="f_tag" form="sf-cust-filters" placeholder="Filter tag…"'
+               . ' value="' . $e($filters['tag']) . '" style="width:8rem">';
             echo '<a class="sf-cust-tool" href="'
                . $e($this->url->to('store/admin/customers')) . '">Reset filters</a>';
             echo '<span class="sf-cust-count">' . number_format($total) . ' customers</span>';
@@ -227,6 +231,10 @@ class StoreAdminCustomers extends Controller
                    . $e((string) $row['reference']) . '">' . $e((string) $row['reference']) . '</a>';
                 if (!empty($row['is_business'])) {
                     echo '<span class="sf-cust-biz">Biz</span>';
+                }
+                $tags = is_array($row['tags'] ?? null) ? $row['tags'] : [];
+                if ($tags !== []) {
+                    echo '<div class="small text-muted">' . $e(implode(', ', $tags)) . '</div>';
                 }
                 echo '</td>';
                 echo '<td title="' . $e((string) ($row['name'] ?? '')) . '">'
@@ -506,6 +514,14 @@ JS;
             echo '<div class="d-flex flex-wrap gap-2">';
             echo '<a class="btn btn-outline-secondary" href="' . $e($ordersListUrl) . '">'
                . '<i class="bi bi-bag me-1"></i>Orders</a>';
+            if ($email !== '') {
+                echo '<a class="btn btn-outline-secondary" href="'
+                   . $e($this->url->to('store/admin/messages', ['q' => $email])) . '">'
+                   . '<i class="bi bi-chat me-1"></i>Messages</a>';
+                echo '<a class="btn btn-outline-secondary" href="'
+                   . $e($this->url->to('store/admin/cases', ['q' => $email])) . '">'
+                   . '<i class="bi bi-life-preserver me-1"></i>Cases</a>';
+            }
             echo '<button type="submit" class="btn btn-primary">Save</button>';
             echo '</div></div>';
 
@@ -522,6 +538,8 @@ JS;
             echo $this->fieldRow('Email', $this->textInput('email', $v('email'), false, 'email'));
             echo $this->fieldRow('Email CC (comma-separated)', $this->textInput('email_cc', $v('email_cc')));
             echo $this->fieldRow('Phone', $this->textInput('phone', $v('phone')));
+            $tagStr = implode(', ', is_array($customer['tags'] ?? null) ? $customer['tags'] : []);
+            echo $this->fieldRow('Tags (comma-separated)', $this->textInput('tags', $tagStr));
             echo $this->fieldRow('VAT Number', $this->textInput('vat_number', $v('vat_number')));
             echo $this->fieldRow('AIR Number', $this->textInput('air_number', $v('air_number')));
             echo $this->fieldRow('UKIMS Number', $this->textInput('ukims_number', $v('ukims_number')));
@@ -693,6 +711,7 @@ JS;
         foreach ($keys as $key) {
             $out[$key] = (string) $this->request->post($key, 'string', '');
         }
+        $out['tags'] = (string) $this->request->post('tags', 'string', '');
         $out['is_business'] = $this->request->post('is_business', 'string', '') !== '' ? 1 : 0;
         return $out;
     }

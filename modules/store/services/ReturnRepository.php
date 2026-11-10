@@ -60,7 +60,73 @@ final class ReturnRepository
         if ($notes !== '') {
             $payload['notes'] = mb_substr(trim($notes), 0, 1000);
         }
-        $this->db->update('store_returns', $payload, ['id' => $id]);
+        $where = ['id' => $id];
+        if (TenantContext::get()->has()) {
+            $where = $this->withTenant($where);
+        }
+        $this->db->update('store_returns', $payload, $where);
+    }
+
+    /**
+     * Upsert by channel + external return id.
+     *
+     * @param array<string, mixed> $data
+     * @return 'created'|'updated'|'skipped'
+     */
+    public function upsertByExternal(int $channelId, string $externalId, array $data): string
+    {
+        $externalId = mb_substr(trim($externalId), 0, 128);
+        if ($channelId <= 0 || $externalId === '' || !TenantContext::get()->has()) {
+            return 'skipped';
+        }
+
+        $existing = $this->db->query(
+            "SELECT * FROM `#__store_returns`
+              WHERE `channel_id` = ? AND `external_id` = ? AND `tenant_id` = ?
+              LIMIT 1",
+            [$channelId, $externalId, $this->tenantId()]
+        )->row;
+
+        $items = $data['items'] ?? [];
+        $json = json_encode(is_array($items) ? $items : [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($json)) {
+            $json = '[]';
+        }
+
+        $payload = [
+            'order_id'          => !empty($data['order_id']) ? (int) $data['order_id'] : null,
+            'channel_id'        => $channelId,
+            'external_id'       => $externalId,
+            'external_order_id' => mb_substr(trim((string) ($data['external_order_id'] ?? '')), 0, 64),
+            'status'            => mb_substr(trim((string) ($data['status'] ?? 'open')) ?: 'open', 0, 64),
+            'reason'            => mb_substr(trim((string) ($data['reason'] ?? '')), 0, 255),
+            'notes'             => mb_substr(trim((string) ($data['notes'] ?? '')), 0, 1000),
+            'refund_amount'     => round((float) ($data['refund_amount'] ?? 0), 2),
+            'currency'          => mb_substr(strtoupper(trim((string) ($data['currency'] ?? 'GBP'))) ?: 'GBP', 0, 3),
+            'buyer_username'    => mb_substr(trim((string) ($data['buyer_username'] ?? '')), 0, 128),
+            'items_json'        => $json,
+            'updated_at'        => date('Y-m-d H:i:s'),
+        ];
+
+        if ($existing === [] || $existing === null) {
+            $payload['created_at'] = date('Y-m-d H:i:s');
+            $this->db->insert('store_returns', $this->withTenant($payload));
+            return 'created';
+        }
+
+        $this->db->update('store_returns', $payload, $this->withTenant(['id' => (int) $existing['id']]));
+        return 'updated';
+    }
+
+    public function markRestocked(int $id, ?string $at = null): void
+    {
+        if ($id <= 0) {
+            throw new InvalidArgumentException('Invalid return id.');
+        }
+        $this->db->update('store_returns', [
+            'restocked_at' => $at ?? date('Y-m-d H:i:s'),
+            'updated_at'   => date('Y-m-d H:i:s'),
+        ], ['id' => $id]);
     }
 
     /** @return array<string, mixed>|null */
@@ -174,6 +240,55 @@ final class ReturnRepository
         )->value;
     }
 
+    /**
+     * Approved / open returns awaiting inbound receive.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function inboundQueue(int $limit = 100, int $offset = 0, string $search = ''): array
+    {
+        $where = ["LOWER(r.`status`) IN ('open', 'approved')"];
+        $params = [];
+        if (TenantContext::get()->has()) {
+            $where[] = 'r.`tenant_id` = ?';
+            $params[] = $this->tenantId();
+        }
+        if ($search !== '') {
+            $where[] = '(r.`external_order_id` LIKE ? OR r.`external_id` LIKE ? OR r.`buyer_username` LIKE ?)';
+            $like = '%' . $search . '%';
+            array_push($params, $like, $like, $like);
+        }
+        $limit = max(1, min(500, $limit));
+        $offset = max(0, $offset);
+        $sql = 'SELECT r.*, c.`label` AS channel_label, o.`external_order_id` AS order_external_id
+                  FROM `#__store_returns` r
+                  LEFT JOIN `#__store_channels` c ON c.`id` = r.`channel_id`
+                  LEFT JOIN `#__store_orders` o ON o.`id` = r.`order_id`
+                 WHERE ' . implode(' AND ', $where)
+             . ' ORDER BY r.`id` ASC LIMIT ' . $limit . ' OFFSET ' . $offset;
+        $rows = $this->db->query($sql, $params)->rows;
+        return array_map(fn(array $r) => $this->hydrate($r), $rows);
+    }
+
+    public function countInbound(string $search = ''): int
+    {
+        $where = ["LOWER(`status`) IN ('open', 'approved')"];
+        $params = [];
+        if (TenantContext::get()->has()) {
+            $where[] = '`tenant_id` = ?';
+            $params[] = $this->tenantId();
+        }
+        if ($search !== '') {
+            $where[] = '(`external_order_id` LIKE ? OR `external_id` LIKE ? OR `buyer_username` LIKE ?)';
+            $like = '%' . $search . '%';
+            array_push($params, $like, $like, $like);
+        }
+        return (int) $this->db->query(
+            'SELECT COUNT(*) FROM `#__store_returns` WHERE ' . implode(' AND ', $where),
+            $params
+        )->value;
+    }
+
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
@@ -196,6 +311,9 @@ final class ReturnRepository
             'items'             => is_array($items) ? $items : [],
             'created_at'        => (string) ($row['created_at'] ?? ''),
             'updated_at'        => (string) ($row['updated_at'] ?? ''),
+            'restocked_at'      => isset($row['restocked_at']) && $row['restocked_at'] !== null && $row['restocked_at'] !== ''
+                ? (string) $row['restocked_at']
+                : null,
         ];
     }
 }

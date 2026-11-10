@@ -303,6 +303,82 @@ final class EbayPostOrderClient
     }
 
     /**
+     * Search seller returns (Post-Order Returns API).
+     *
+     * @return array{members: list<array<string, mixed>>, total: int, offset: int, limit: int}
+     */
+    public function searchReturns(
+        string $returnState = 'ALL',
+        int $limit = 50,
+        int $offset = 0,
+        int $lookbackDays = 90,
+    ): array {
+        $to = gmdate('Y-m-d\TH:i:s\Z');
+        $from = gmdate('Y-m-d\TH:i:s\Z', time() - max(1, $lookbackDays) * 86400);
+
+        $query = [
+            'limit'  => (string) max(1, min(200, $limit)),
+            'offset' => (string) max(0, $offset),
+            'creation_date_range_from' => $from,
+            'creation_date_range_to'   => $to,
+        ];
+        $returnState = strtoupper(trim($returnState));
+        if ($returnState !== '' && $returnState !== 'ALL') {
+            $query['return_state'] = $returnState;
+        }
+
+        $path = '/post-order/v2/return/search?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $decoded = $this->request('GET', $path);
+
+        // Normalize members from returns/members keys.
+        if (!isset($decoded['members']) && isset($decoded['returns']) && is_array($decoded['returns'])) {
+            $decoded['members'] = $decoded['returns'];
+        }
+
+        return $this->normalizeSearchPage($decoded, $limit, $offset);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getReturn(string $returnId): array
+    {
+        $returnId = $this->requireId($returnId, 'Return ID');
+        return $this->request('GET', '/post-order/v2/return/' . rawurlencode($returnId));
+    }
+
+    /**
+     * Issue a refund against an eBay return (Post-Order Returns API).
+     *
+     * @return array<string, mixed>
+     */
+    public function issueReturnRefund(
+        string $returnId,
+        ?float $amount = null,
+        string $currency = 'GBP',
+        string $comments = '',
+    ): array {
+        $returnId = $this->requireId($returnId, 'Return ID');
+        $payload = [];
+        if ($amount !== null && $amount > 0) {
+            $payload['refundAmount'] = [
+                'value'    => number_format($amount, 2, '.', ''),
+                'currency' => strtoupper(trim($currency) !== '' ? $currency : 'GBP'),
+            ];
+        }
+        $comments = trim($comments);
+        if ($comments !== '') {
+            $payload['comments'] = ['content' => $comments];
+        }
+
+        return $this->request(
+            'POST',
+            '/post-order/v2/return/' . rawurlencode($returnId) . '/issue_refund',
+            $payload !== [] ? $payload : null,
+        );
+    }
+
+    /**
      * Escalate an INR inquiry to an eBay support case.
      *
      * @return array<string, mixed>

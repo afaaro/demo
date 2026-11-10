@@ -525,14 +525,28 @@ final class PurchaseOrderRepository
         }
 
         $wroteOff = false;
+        $claimsRaised = [];
         foreach ($writeOffByLineId as $lineId => $qty) {
             $lineId = (int) $lineId;
             if ($lineId <= 0) {
                 continue;
             }
+            $before = $this->findLine($lineId);
+            $prevWrite = (int) ($before['qty_written_off'] ?? 0);
             if ($this->setLineWrittenOff($lineId, $poId, (int) $qty)) {
                 $wroteOff = true;
+                $delta = max(0, (int) $qty - $prevWrite);
+                if ($delta > 0 && $before !== null) {
+                    $claimsRaised[] = [
+                        'po_line_id' => $lineId,
+                        'qty'        => $delta,
+                        'variant_id' => (int) ($before['variant_id'] ?? 0),
+                    ];
+                }
             }
+        }
+        if ($claimsRaised !== []) {
+            $this->raiseSupplierClaimsFromShortfalls($poId, $claimsRaised);
         }
 
         $out = [];
@@ -563,6 +577,41 @@ final class PurchaseOrderRepository
         }
 
         return $out;
+    }
+
+    /**
+     * Raise open supplier claims for newly written-off shortfall qty.
+     *
+     * @param list<array{po_line_id:int, qty:int, variant_id?:int}> $shortfalls
+     */
+    public function raiseSupplierClaimsFromShortfalls(int $poId, array $shortfalls): int
+    {
+        $po = $this->find($poId);
+        if ($po === null || $shortfalls === []) {
+            return 0;
+        }
+        $supplierId = (int) ($po['supplier_id'] ?? 0);
+        $n = 0;
+        try {
+            $claims = new SupplierClaimRepository($this->db);
+            foreach ($shortfalls as $row) {
+                $qty = max(0, (int) ($row['qty'] ?? 0));
+                if ($qty <= 0) {
+                    continue;
+                }
+                $claims->createFromShortfall(
+                    $poId,
+                    (int) ($row['po_line_id'] ?? 0),
+                    $supplierId,
+                    $qty,
+                    'shortfall',
+                    'Auto-created from PO write-off / shortfall'
+                );
+                $n++;
+            }
+        } catch (\Throwable) {
+        }
+        return $n;
     }
 
     /**
@@ -1080,5 +1129,70 @@ final class PurchaseOrderRepository
                 $this->db->query("ALTER TABLE `#__store_purchase_orders` ADD COLUMN `{$name}` {$ddl}");
             }
         }
+    }
+
+    /**
+     * Supplier OTIF scorecard: on-time = received_at date <= expected_date (when both set).
+     *
+     * @return list<array{
+     *   supplier_name:string, pos:int, received:int, on_time:int, late:int,
+     *   otif_pct:float, avg_delay_days:float|null
+     * }>
+     */
+    public function supplierOtif(int $days = 180): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $days = max(30, min(730, $days));
+        $rows = $this->db->query(
+            "SELECT po.`supplier_name`,
+                    COUNT(*) AS pos,
+                    SUM(CASE WHEN po.`received_at` IS NOT NULL THEN 1 ELSE 0 END) AS received,
+                    SUM(CASE
+                          WHEN po.`received_at` IS NOT NULL
+                           AND po.`expected_date` IS NOT NULL
+                           AND DATE(po.`received_at`) <= po.`expected_date`
+                          THEN 1 ELSE 0 END) AS on_time,
+                    SUM(CASE
+                          WHEN po.`received_at` IS NOT NULL
+                           AND po.`expected_date` IS NOT NULL
+                           AND DATE(po.`received_at`) > po.`expected_date`
+                          THEN 1 ELSE 0 END) AS late,
+                    AVG(CASE
+                          WHEN po.`received_at` IS NOT NULL
+                           AND po.`expected_date` IS NOT NULL
+                           AND DATE(po.`received_at`) > po.`expected_date`
+                          THEN DATEDIFF(DATE(po.`received_at`), po.`expected_date`)
+                          ELSE NULL END) AS avg_delay_days
+               FROM `#__store_purchase_orders` po
+              WHERE po.`tenant_id` = ?
+                AND po.`supplier_name` <> ''
+                AND po.`status` <> ?
+                AND COALESCE(po.`date_sent`, po.`confirmed_at`, po.`created_at`) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              GROUP BY po.`supplier_name`
+              ORDER BY received DESC, supplier_name ASC",
+            [$this->tenantId(), self::STATUS_CANCELLED, $days]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $received = (int) ($row['received'] ?? 0);
+            $onTime = (int) ($row['on_time'] ?? 0);
+            $late = (int) ($row['late'] ?? 0);
+            $scored = $onTime + $late;
+            $out[] = [
+                'supplier_name'  => (string) ($row['supplier_name'] ?? ''),
+                'pos'            => (int) ($row['pos'] ?? 0),
+                'received'       => $received,
+                'on_time'        => $onTime,
+                'late'           => $late,
+                'otif_pct'       => $scored > 0 ? round(($onTime / $scored) * 100, 1) : 0.0,
+                'avg_delay_days' => $row['avg_delay_days'] !== null
+                    ? round((float) $row['avg_delay_days'], 1)
+                    : null,
+            ];
+        }
+        return $out;
     }
 }

@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use Module\Store\Services\SupplierPortalTokenRepository;
 use Module\Store\Services\SupplierRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
@@ -224,7 +225,51 @@ class StoreAdminSuppliers extends Controller
             echo '<a class="btn btn-outline-secondary" href="'
                . $e($this->url->to('store/admin/suppliers')) . '">Cancel</a>';
             echo '</form>';
+
+            $portalTokens = (new SupplierPortalTokenRepository($this->db))->forSupplier($id);
+            echo '<div class="border rounded p-3 mt-3" style="max-width:40rem">';
+            echo '<h2 class="h6">Supplier portal link</h2>';
+            echo '<p class="small text-muted">Generate a tokenised link so the supplier can view open POs, confirm, and submit an ASN.</p>';
+            echo '<form method="post" action="'
+               . $e($this->url->to('store/admin/suppliers/portal-token', ['id' => $id])) . '">'
+               . $this->request->csrfField()
+               . '<button type="submit" class="btn btn-sm btn-outline-primary">Generate portal token</button></form>';
+            if ($portalTokens !== []) {
+                echo '<ul class="small mt-3 mb-0">';
+                foreach (array_slice($portalTokens, 0, 3) as $tok) {
+                    $active = empty($tok['revoked_at']);
+                    $url = $this->url->to('store/supplier-portal', ['token' => (string) $tok['token']]);
+                    echo '<li class="mb-1">' . ($active ? '<a href="' . $e($url) . '" target="_blank">'
+                       . $e($url) . '</a>' : '<span class="text-muted">revoked</span>')
+                       . ' <span class="text-muted">· ' . $e((string) ($tok['created_at'] ?? '')) . '</span></li>';
+                }
+                echo '</ul>';
+            }
+            echo '</div>';
         });
+    }
+
+    public function portalTokenAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/suppliers');
+            return;
+        }
+        $this->guardCsrf();
+        $id = (int) $this->request->get('id', 'int', 0);
+        if ($this->suppliers->find($id) === null) {
+            $this->notify->error('Supplier not found.');
+            redirect_to('store/admin/suppliers');
+            return;
+        }
+        try {
+            $created = (new SupplierPortalTokenRepository($this->db))->create($id);
+            $url = $this->url->to('store/supplier-portal', ['token' => $created['token']]);
+            $this->notify->success('Portal link ready: ' . $url);
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/suppliers/edit', ['id' => $id]);
     }
 
     public function deleteAction(): void

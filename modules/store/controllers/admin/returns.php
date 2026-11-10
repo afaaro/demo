@@ -1,9 +1,15 @@
 <?php
 declare(strict_types=1);
 
+use Module\Store\Services\ChannelClientFactory;
 use Module\Store\Services\ChannelRepository;
+use Module\Store\Services\Channels\Marketplace\Ebay\EbayChannelClient;
+use Module\Store\Services\CredentialsVault;
+use Module\Store\Services\InventoryService;
 use Module\Store\Services\OrderRepository;
 use Module\Store\Services\ReturnRepository;
+use Module\Store\Services\ReturnSyncService;
+use Module\Store\Services\SyncLogRepository;
 use System\Engine\Controller;
 use System\Engine\NotFoundException;
 use System\Library\Dataset;
@@ -134,13 +140,199 @@ class StoreAdminReturns extends Controller
             $this->view->assign('title', 'Returns');
             $this->view->block('right_sidebar', 'Returns');
 
+            $ebayChannels = array_values(array_filter(
+                $this->channels->all(),
+                static fn($c) => $c->type === 'ebay' && $c->enabled && $c->isConnected()
+            ));
+
             echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">';
             echo '<div><h1 class="h3 mb-1"><i class="bi bi-arrow-return-left me-1"></i>Returns</h1>'
                . '<p class="text-muted small mb-0">RMA / refunds logged against orders.</p></div>';
-            echo '</div>';
+            echo '<div class="d-flex flex-wrap gap-2">';
+            if ($ebayChannels !== []) {
+                echo '<form method="post" class="d-inline-flex gap-1 align-items-center" action="'
+                   . $this->view->e($this->url->to('store/admin/returns/sync')) . '">'
+                   . $this->request->csrfField()
+                   . '<select name="channel_id" class="form-select form-select-sm" style="width:auto">';
+                foreach ($ebayChannels as $c) {
+                    echo '<option value="' . (int) $c->id . '">'
+                       . $this->view->e($c->label !== '' ? $c->label : $c->name) . '</option>';
+                }
+                echo '</select>'
+                   . '<button type="submit" class="btn btn-outline-secondary btn-sm">'
+                   . '<i class="bi bi-arrow-repeat me-1"></i>Sync eBay returns</button></form>';
+            }
+            echo '<a class="btn btn-outline-primary btn-sm" href="'
+               . $this->view->e($this->url->to('store/admin/returns/inbound'))
+               . '"><i class="bi bi-box-arrow-in-down me-1"></i>Inbound receive</a>';
+            echo '</div></div>';
 
             echo $dataset->render();
         });
+    }
+
+    public function syncAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/returns');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/returns');
+            return;
+        }
+
+        $channelId = (int) $this->request->post('channel_id', 'int', 0);
+        $channel = $this->channels->find($channelId);
+        if ($channel === null || $channel->type !== 'ebay' || !$channel->isConnected()) {
+            $this->notify->error('Select a connected eBay channel.');
+            redirect_to('store/admin/returns');
+            return;
+        }
+
+        $vault = CredentialsVault::forTenant(
+            (string) $this->config->get('store.credentials_key', '')
+        );
+        $factory = new ChannelClientFactory($vault, $this->channels);
+        $sync = new ReturnSyncService($this->db, $factory, $this->returns);
+        $log = new SyncLogRepository($this->db);
+
+        try {
+            $stats = $sync->syncChannel($channel, 90);
+            $log->log(
+                (int) $channel->id,
+                'returns_sync',
+                'ok',
+                sprintf(
+                    'Returns sync: %d created, %d updated, %d skipped, %d errors',
+                    $stats['created'],
+                    $stats['updated'],
+                    $stats['skipped'],
+                    $stats['errors']
+                ),
+                $stats,
+                $this->auth->id(),
+                '',
+            );
+            $this->notify->success(
+                'Synced returns: +' . $stats['created'] . ' / ~' . $stats['updated']
+                . ($stats['errors'] > 0 ? ' (' . $stats['errors'] . ' errors)' : '')
+            );
+        } catch (\Throwable $e) {
+            $log->log(
+                (int) $channel->id,
+                'returns_sync',
+                'error',
+                $e->getMessage(),
+                [],
+                $this->auth->id(),
+                '',
+            );
+            $this->notify->error('Returns sync failed: ' . $e->getMessage());
+        }
+
+        redirect_to('store/admin/returns');
+    }
+
+    public function inboundAction(): void
+    {
+        $q = trim((string) $this->request->get('q', 'string', ''));
+        $rows = $this->returns->inboundQueue(100, 0, $q);
+        $total = $this->returns->countInbound($q);
+
+        echo $this->view->inline(function () use ($rows, $total, $q) {
+            $this->view->assign('title', 'Returns inbound');
+            $this->view->block('right_sidebar', 'Returns');
+            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+
+            echo '<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">';
+            echo '<div><h1 class="h3 mb-1"><i class="bi bi-box-arrow-in-down me-1"></i>Returns inbound</h1>'
+               . '<p class="text-muted small mb-0">'
+               . (int) $total . ' open/approved return(s) awaiting receive.</p></div>';
+            echo '<a class="btn btn-outline-secondary btn-sm" href="'
+               . $e($this->url->to('store/admin/returns')) . '">All returns</a>';
+            echo '</div>';
+
+            echo '<form method="get" class="mb-3 d-flex gap-2">';
+            echo '<input type="hidden" name="route" value="store/admin/returns/inbound">';
+            echo '<input type="search" class="form-control form-control-sm" name="q" value="'
+               . $e($q) . '" placeholder="Order / buyer…" style="max-width:16rem">';
+            echo '<button type="submit" class="btn btn-sm btn-outline-secondary">Search</button>';
+            echo '</form>';
+
+            if ($rows === []) {
+                echo '<div class="alert alert-success">Nothing waiting to receive.</div>';
+                return;
+            }
+
+            echo '<div class="table-responsive"><table class="table table-sm table-hover align-middle bg-white border">';
+            echo '<thead class="table-light"><tr>'
+               . '<th>#</th><th>Order</th><th>Channel</th><th>Buyer</th><th>Status</th>'
+               . '<th>Reason</th><th></th></tr></thead><tbody>';
+            foreach ($rows as $r) {
+                echo '<tr>';
+                echo '<td>' . (int) $r['id'] . '</td>';
+                echo '<td>';
+                if (!empty($r['order_id'])) {
+                    echo '<a href="' . $e($this->url->to('store/admin/orders/view', ['id' => (int) $r['order_id']])) . '">'
+                       . $e((string) ($r['external_order_id'] !== '' ? $r['external_order_id'] : '#' . $r['order_id']))
+                       . '</a>';
+                } else {
+                    echo $e((string) ($r['external_order_id'] !== '' ? $r['external_order_id'] : '—'));
+                }
+                echo '</td>';
+                echo '<td class="small">' . $e((string) ($r['channel_label'] !== '' ? $r['channel_label'] : '—')) . '</td>';
+                echo '<td class="small">' . $e((string) ($r['buyer_username'] !== '' ? $r['buyer_username'] : '—')) . '</td>';
+                echo '<td><span class="badge text-bg-warning">' . $e((string) $r['status']) . '</span></td>';
+                echo '<td class="small">' . $e((string) $r['reason']) . '</td>';
+                echo '<td class="text-end text-nowrap">';
+                echo '<form method="post" class="d-inline" action="'
+                   . $e($this->url->to('store/admin/returns/receive', ['id' => (int) $r['id']])) . '">'
+                   . $this->request->csrfField()
+                   . '<button type="submit" class="btn btn-sm btn-success"'
+                   . ' onclick="return confirm(\'Mark return #' . (int) $r['id'] . ' as received and restock?\');">'
+                   . 'Receive</button></form> ';
+                echo '<a class="btn btn-sm btn-outline-secondary" href="'
+                   . $e($this->url->to('store/admin/returns/view', ['id' => (int) $r['id']])) . '">View</a>';
+                echo '</td></tr>';
+            }
+            echo '</tbody></table></div>';
+        });
+    }
+
+    public function receiveAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/returns/inbound');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/returns/inbound');
+            return;
+        }
+
+        $id = (int) $this->request->get('id', 'int', 0);
+        $row = $this->returns->find($id);
+        if ($row === null) {
+            throw new NotFoundException('Return not found.');
+        }
+
+        try {
+            $this->returns->updateStatus($id, 'received');
+            if (empty($row['restocked_at'])) {
+                $this->restockReturnItems($row);
+            }
+            $this->notify->success('Return #' . $id . ' marked received.');
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/returns/inbound');
     }
 
     public function viewAction(): void
@@ -188,6 +380,10 @@ class StoreAdminReturns extends Controller
                . ($row['notes'] !== '' ? $e((string) $row['notes']) : '<span class="text-muted">—</span>') . '</dd>';
             echo '<dt class="col-sm-3">Created</dt><dd class="col-sm-9">' . $e((string) $row['created_at']) . '</dd>';
             echo '<dt class="col-sm-3">Updated</dt><dd class="col-sm-9">' . $e((string) $row['updated_at']) . '</dd>';
+            echo '<dt class="col-sm-3">Restocked</dt><dd class="col-sm-9">'
+               . ($row['restocked_at'] !== null
+                    ? $e((string) $row['restocked_at'])
+                    : '<span class="text-muted">Not yet</span>') . '</dd>';
             echo '</dl></div></div>';
 
             echo '<div class="col-lg-5">';
@@ -301,6 +497,15 @@ class StoreAdminReturns extends Controller
 
         try {
             $this->returns->updateStatus($id, $status, $notes);
+
+            if (strtolower($status) === 'received' && empty($row['restocked_at'])) {
+                $this->restockReturnItems($row);
+            }
+
+            if (strtolower($status) === 'refunded') {
+                $this->tryChannelRefund($row);
+            }
+
             if (!empty($row['order_id'])) {
                 try {
                     $this->load->service('OrderAuditRepository')->log(
@@ -325,6 +530,113 @@ class StoreAdminReturns extends Controller
         }
 
         redirect_to('store/admin/returns/view', ['id' => $id]);
+    }
+
+    /**
+     * Restock variant qty from items_json once when status becomes received.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function restockReturnItems(array $row): void
+    {
+        $items = is_array($row['items'] ?? null) ? $row['items'] : [];
+        $inventory = new InventoryService($this->db);
+        $restocked = 0;
+
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $variantId = (int) ($item['variant_id'] ?? $item['variantId'] ?? 0);
+            $qty = (int) ($item['qty'] ?? $item['quantity'] ?? $item['qty_returned'] ?? 0);
+            if ($variantId <= 0 || $qty <= 0) {
+                continue;
+            }
+            $inventory->adjust(
+                $variantId,
+                $qty,
+                'return_restock',
+                'Return #' . (int) $row['id'],
+                $this->auth->id(),
+            );
+            $restocked++;
+        }
+
+        if ($restocked > 0) {
+            $this->returns->markRestocked((int) $row['id']);
+            $this->notify->success('Restocked ' . $restocked . ' line(s) into inventory.');
+            return;
+        }
+
+        // No restockable lines — stamp anyway so status=received does not retry forever.
+        $this->returns->markRestocked((int) $row['id']);
+    }
+
+    /**
+     * Best-effort channel refund; always keeps the local refund_amount.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function tryChannelRefund(array $row): void
+    {
+        $channelId = (int) ($row['channel_id'] ?? 0);
+        $externalId = trim((string) ($row['external_id'] ?? ''));
+        $amount = (float) ($row['refund_amount'] ?? 0);
+        $currency = (string) (($row['currency'] ?? '') !== '' ? $row['currency'] : 'GBP');
+        $log = new SyncLogRepository($this->db);
+
+        if ($channelId <= 0) {
+            error_log('Return #' . (int) $row['id'] . ' refunded locally (no channel); amount=' . $amount);
+            return;
+        }
+
+        try {
+            $channel = $this->channels->find($channelId);
+            if ($channel === null || !$channel->isConnected()) {
+                $log->log($channelId, 'return_refund', 'skipped', 'Channel not connected for return refund', [
+                    'return_id' => (int) $row['id'],
+                    'amount'    => $amount,
+                ], $this->auth->id(), $this->currentUserLabel());
+                return;
+            }
+
+            $vault = CredentialsVault::forTenant(
+                (string) $this->config->get('store.credentials_key', '')
+            );
+            $factory = new ChannelClientFactory($vault, $this->channels);
+            $client = $factory->make($channel);
+
+            if ($channel->type === 'ebay' && $client instanceof EbayChannelClient && $externalId !== '') {
+                $client->issueReturnRefund(
+                    $externalId,
+                    $amount > 0 ? $amount : null,
+                    $currency,
+                    'Return #' . (int) $row['id'] . ' refunded in Store admin.',
+                );
+                $log->log($channelId, 'return_refund', 'ok', 'eBay return refund issued for #' . (int) $row['id'], [
+                    'return_id'   => (int) $row['id'],
+                    'external_id' => $externalId,
+                    'amount'      => $amount,
+                    'currency'    => $currency,
+                ], $this->auth->id(), $this->currentUserLabel());
+                return;
+            }
+
+            $log->log($channelId, 'return_refund', 'skipped', 'Channel refund not available; local refund amount kept', [
+                'return_id'    => (int) $row['id'],
+                'channel_type' => $channel->type,
+                'amount'       => $amount,
+                'currency'     => $currency,
+                'external_id'  => $externalId,
+            ], $this->auth->id(), $this->currentUserLabel());
+        } catch (\Throwable $e) {
+            $log->log($channelId, 'return_refund', 'error', $e->getMessage(), [
+                'return_id'   => (int) $row['id'],
+                'external_id' => $externalId,
+                'amount'      => $amount,
+            ], $this->auth->id(), $this->currentUserLabel());
+            error_log('Return channel refund #' . (int) $row['id'] . ': ' . $e->getMessage());
+        }
     }
 
     private function currentUserLabel(): string

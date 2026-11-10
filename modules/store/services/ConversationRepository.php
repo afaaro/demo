@@ -76,33 +76,166 @@ final class ConversationRepository
     }
 
     /**
+     * @param array{assignment?: string, assigned_user_id?: int, mine_user_id?: int} $filters
+     *   assignment: assigned|unassigned|overdue|mine|'' 
      * @return array<int, array<string, mixed>>
      */
-    public function paginate(int $channelId, int $limit = 25, int $offset = 0, ?int $tenantId = null): array
-    {
+    public function paginate(
+        int $channelId,
+        int $limit = 25,
+        int $offset = 0,
+        ?int $tenantId = null,
+        array $filters = [],
+    ): array {
         $tid = $this->resolveTenantId($tenantId);
         if ($tid <= 0) {
             return [];
         }
+        [$extra, $params] = $this->assignmentWhere($filters);
+        $params = array_merge([$channelId, $tid], $params, [$limit, $offset]);
         return $this->db->query(
             "SELECT * FROM `#__store_conversations`
-              WHERE `channel_id` = ? AND `tenant_id` = ?
-              ORDER BY `latest_date` DESC, `id` DESC
+              WHERE `channel_id` = ? AND `tenant_id` = ?" . $extra . "
+              ORDER BY `priority` DESC, `due_at` IS NULL ASC, `due_at` ASC, `latest_date` DESC, `id` DESC
               LIMIT ? OFFSET ?",
-            [$channelId, $tid, $limit, $offset]
+            $params
         )->rows;
     }
 
-    public function count(int $channelId, ?int $tenantId = null): int
+    /**
+     * @param array{assignment?: string, assigned_user_id?: int, mine_user_id?: int} $filters
+     */
+    public function count(int $channelId, ?int $tenantId = null, array $filters = []): int
     {
         $tid = $this->resolveTenantId($tenantId);
         if ($tid <= 0) {
             return 0;
         }
+        [$extra, $params] = $this->assignmentWhere($filters);
+        $params = array_merge([$channelId, $tid], $params);
         return (int) $this->db->query(
-            "SELECT COUNT(*) FROM `#__store_conversations` WHERE `channel_id` = ? AND `tenant_id` = ?",
-            [$channelId, $tid]
+            "SELECT COUNT(*) FROM `#__store_conversations`
+              WHERE `channel_id` = ? AND `tenant_id` = ?" . $extra,
+            $params
         )->value;
+    }
+
+    /**
+     * Overdue conversations across all channels for the current tenant.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function overdueAcrossChannels(int $limit = 50): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        try {
+            return $this->db->query(
+                "SELECT cv.*, c.`label` AS channel_label
+                   FROM `#__store_conversations` cv
+                   LEFT JOIN `#__store_channels` c
+                     ON c.`id` = cv.`channel_id` AND c.`tenant_id` = cv.`tenant_id`
+                  WHERE cv.`tenant_id` = ?
+                    AND cv.`due_at` IS NOT NULL
+                    AND cv.`due_at` < NOW()
+                    AND UPPER(cv.`status`) NOT IN ('ARCHIVE','ARCHIVED','DELETE','DELETED','CLOSED')
+                  ORDER BY cv.`due_at` ASC
+                  LIMIT ?",
+                [$this->tenantId(), $limit]
+            )->rows;
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    public function setAssignee(int $conversationId, ?int $userId): void
+    {
+        if ($conversationId <= 0 || !TenantContext::get()->has()) {
+            return;
+        }
+        $this->db->query(
+            "UPDATE `#__store_conversations`
+                SET `assigned_user_id` = ?
+              WHERE `id` = ? AND `tenant_id` = ?",
+            [$userId !== null && $userId > 0 ? $userId : null, $conversationId, $this->tenantId()]
+        );
+    }
+
+    public function setDueAt(int $conversationId, ?string $dueAt): void
+    {
+        if ($conversationId <= 0 || !TenantContext::get()->has()) {
+            return;
+        }
+        $normalized = $this->normalizeDueAt($dueAt);
+        $this->db->query(
+            "UPDATE `#__store_conversations`
+                SET `due_at` = ?
+              WHERE `id` = ? AND `tenant_id` = ?",
+            [$normalized, $conversationId, $this->tenantId()]
+        );
+    }
+
+    public function setPriority(int $conversationId, int $priority): void
+    {
+        if ($conversationId <= 0 || !TenantContext::get()->has()) {
+            return;
+        }
+        $this->db->query(
+            "UPDATE `#__store_conversations`
+                SET `priority` = ?
+              WHERE `id` = ? AND `tenant_id` = ?",
+            [max(0, min(9, $priority)), $conversationId, $this->tenantId()]
+        );
+    }
+
+    /**
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private function assignmentWhere(array $filters): array
+    {
+        $assignment = strtolower(trim((string) ($filters['assignment'] ?? '')));
+        $extra = '';
+        $params = [];
+
+        if ($assignment === 'assigned') {
+            $extra .= ' AND `assigned_user_id` IS NOT NULL AND `assigned_user_id` > 0';
+        } elseif ($assignment === 'unassigned') {
+            $extra .= ' AND (`assigned_user_id` IS NULL OR `assigned_user_id` = 0)';
+        } elseif ($assignment === 'overdue') {
+            $extra .= ' AND `due_at` IS NOT NULL AND `due_at` < NOW()'
+                . " AND UPPER(`status`) NOT IN ('ARCHIVE','ARCHIVED','DELETE','DELETED','CLOSED')";
+        } elseif ($assignment === 'mine') {
+            $uid = (int) ($filters['mine_user_id'] ?? $filters['assigned_user_id'] ?? 0);
+            if ($uid > 0) {
+                $extra .= ' AND `assigned_user_id` = ?';
+                $params[] = $uid;
+            } else {
+                $extra .= ' AND 1=0';
+            }
+        }
+
+        $assignedUserId = (int) ($filters['assigned_user_id'] ?? 0);
+        if ($assignedUserId > 0 && $assignment !== 'mine') {
+            $extra .= ' AND `assigned_user_id` = ?';
+            $params[] = $assignedUserId;
+        }
+
+        return [$extra, $params];
+    }
+
+    private function normalizeDueAt(?string $dueAt): ?string
+    {
+        $dueAt = trim((string) $dueAt);
+        if ($dueAt === '') {
+            return null;
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dueAt)) {
+            return $dueAt . ' 23:59:59';
+        }
+        $ts = strtotime($dueAt);
+        return $ts !== false ? date('Y-m-d H:i:s', $ts) : null;
     }
 
     public function countUnread(int $channelId, ?int $tenantId = null): int

@@ -14,7 +14,8 @@ apiAddress: :9997
 
 hls: yes
 hlsAddress: :8888
-hlsAlwaysRemux: yes
+# Off: avoids remux crash loops on broken CDN DTS (raw mogadishu).
+hlsAlwaysRemux: no
 hlsVariant: fmp4
 hlsSegmentCount: 7
 hlsSegmentDuration: 1s

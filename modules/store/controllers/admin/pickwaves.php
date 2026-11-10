@@ -45,11 +45,12 @@ class StoreAdminPickwaves extends Controller
             $this->factory,
             $this->shipments,
             BASEDIR . 'storage' . DIRECTORY_SEPARATOR . 'store',
+            $this->db,
         );
         $this->courierReady = $this->courier->findDefaultCourierChannel() !== null;
 
         $this->pickwaves  = new PickwaveRepository($this->db);
-        $this->service    = new PickwaveService($this->pickwaves, $despatch, $this->courier);
+        $this->service    = new PickwaveService($this->pickwaves, $despatch, $this->courier, $this->db);
         $this->orders     = new OrderRepository($this->db);
         $this->brandsRepo = new BrandRepository($this->db);
         // Permissions: Action.php only.
@@ -349,11 +350,32 @@ class StoreAdminPickwaves extends Controller
         }
 
         return [
-            'channel_id' => (int) ($f['channel_id'] ?? 0),
-            'q'          => trim((string) ($state['q'] ?? '')),
-            'sku'        => $sku,
-            'brands'     => $brand !== '' ? [$brand] : [],
+            'channel_id'      => (int) ($f['channel_id'] ?? 0),
+            'q'               => trim((string) ($state['q'] ?? '')),
+            'sku'             => $sku,
+            'brands'          => $brand !== '' ? [$brand] : [],
+            'ship_by_from'    => trim((string) ($f['ship_by_from'] ?? $this->request->get('ship_by_from', 'string', ''))),
+            'ship_by_to'      => trim((string) ($f['ship_by_to'] ?? $this->request->get('ship_by_to', 'string', ''))),
+            'shipping_method' => trim((string) ($f['shipping_method'] ?? $this->request->get('shipping_method', 'string', ''))),
+            'warehouse'       => trim((string) ($f['warehouse'] ?? $this->request->get('warehouse', 'string', ''))),
+            'priority'        => (string) ($f['priority'] ?? $this->request->get('priority', 'string', '')) === '1',
         ];
+    }
+
+    public function suggestAction(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        $filters = [
+            'channel_id'      => (int) $this->request->get('channel_id', 'int', 0),
+            'ship_by_from'    => trim((string) $this->request->get('ship_by_from', 'string', '')),
+            'ship_by_to'      => trim((string) $this->request->get('ship_by_to', 'string', '')),
+            'shipping_method' => trim((string) $this->request->get('shipping_method', 'string', '')),
+            'warehouse'       => trim((string) $this->request->get('warehouse', 'string', '')),
+            'priority'        => (string) $this->request->get('priority', 'string', '') === '1',
+            'q'               => trim((string) $this->request->get('q', 'string', '')),
+        ];
+        $ids = $this->pickwaves->suggestOutstandingOrderIds($filters, 200);
+        echo json_encode(['ok' => true, 'order_ids' => $ids, 'count' => count($ids)]);
     }
 
     // =========================================================================
@@ -420,6 +442,12 @@ class StoreAdminPickwaves extends Controller
         $orders    = $data['orders'];
         $flatLines = $this->service->flatPickLines($orders);
         $consol    = $this->service->consolidatePickingLines($orders);
+        $scanTotals = $this->service->scanTotals($id);
+        $packTotals = $this->service->scanTotals($id, PickwaveService::STAGE_PACK);
+        $packMode = strtolower(trim((string) $this->config->get('store.pack_confirm', 'hard')));
+        if (!in_array($packMode, ['hard', 'soft', 'off'], true)) {
+            $packMode = 'hard';
+        }
         $isOpen    = strtolower((string) ($wave['status'] ?? '')) === 'open';
         $groupByOrders = (string) $this->request->get('group', 'string', '0') === '1';
 
@@ -432,7 +460,8 @@ class StoreAdminPickwaves extends Controller
         $outstanding = max(0, count($orders) - $fulfilled);
 
         echo $this->view->inline(function () use (
-            $wave, $orders, $flatLines, $consol, $isOpen, $groupByOrders, $outstanding, $fulfilled
+            $wave, $orders, $flatLines, $consol, $scanTotals, $packTotals, $packMode,
+            $isOpen, $groupByOrders, $outstanding, $fulfilled
         ) {
             $this->view->assign('title', 'Edit Pickwave ' . $wave['id']);
             $this->view->block('right_sidebar', 'Pickwaves');
@@ -507,10 +536,10 @@ class StoreAdminPickwaves extends Controller
             }
             echo '</form></div></div>';
 
-            // —— Scan Product ——
+            // —— Scan Product (pick) ——
             if ($isOpen) {
                 echo '<div class="card border-0 shadow-sm mb-3" id="scan-product"><div class="card-body">';
-                echo '<h2 class="h6 text-uppercase text-muted mb-3">Scan Product</h2>';
+                echo '<h2 class="h6 text-uppercase text-muted mb-3">Scan Product (pick)</h2>';
                 echo '<div class="row g-2 align-items-end">';
                 echo '<div class="col-md-2"><label class="form-label small mb-0">Despatch Date</label>'
                    . '<input type="date" class="form-control form-control-sm" id="sf-despatch-date"'
@@ -524,6 +553,23 @@ class StoreAdminPickwaves extends Controller
                    . 'Scan</button></div>';
                 echo '<div class="col-md-2"><div class="small text-muted" id="sf-scan-status">Ready</div></div>';
                 echo '</div></div></div>';
+
+                // —— Pack station ——
+                if ($packMode !== 'off') {
+                    echo '<div class="card border-0 shadow-sm mb-3" id="pack-station"><div class="card-body">';
+                    echo '<h2 class="h6 text-uppercase text-muted mb-1">Pack station</h2>';
+                    echo '<p class="small text-muted mb-3">Confirm pack scans before despatch'
+                       . ($packMode === 'hard' ? ' (required)' : ' (soft — warning only)') . '.</p>';
+                    echo '<div class="row g-2 align-items-end">';
+                    echo '<div class="col-md-4"><label class="form-label small mb-0" for="sf-pack-sku">Enter SKU/Barcode</label>'
+                       . '<input type="text" class="form-control form-control-sm" id="sf-pack-sku" autocomplete="off"></div>';
+                    echo '<div class="col-md-2"><label class="form-label small mb-0" for="sf-pack-qty">Qty</label>'
+                       . '<input type="number" min="1" value="1" class="form-control form-control-sm" id="sf-pack-qty"></div>';
+                    echo '<div class="col-md-2"><button type="button" class="btn btn-success btn-sm w-100" id="sf-pack-btn">'
+                       . 'Pack scan</button></div>';
+                    echo '<div class="col-md-4"><div class="small text-muted" id="sf-pack-status">Ready</div></div>';
+                    echo '</div></div></div>';
+                }
             }
 
             // —— Lines table ——
@@ -604,9 +650,11 @@ class StoreAdminPickwaves extends Controller
                 echo '<details class="mt-3"><summary class="small text-muted">Consolidated pick ('
                    . count($consol) . ' SKUs)</summary>';
                 echo '<div class="table-responsive mt-2"><table class="table table-sm">';
-                echo '<thead><tr><th>SKU</th><th>Title</th><th class="text-end">Qty</th></tr></thead><tbody>';
+                echo '<thead><tr><th>Bin</th><th>SKU</th><th>Title</th><th class="text-end">Qty</th></tr></thead><tbody>';
                 foreach ($consol as $line) {
-                    echo '<tr><td><code>' . $this->view->e($line['external_sku'] ?: '—') . '</code></td>'
+                    $bin = trim((string) ($line['pick_bin'] ?? ''));
+                    echo '<tr><td>' . $this->view->e($bin !== '' ? $bin : '—') . '</td>'
+                       . '<td><code>' . $this->view->e($line['external_sku'] ?: '—') . '</code></td>'
                        . '<td>' . $this->view->e($line['title'] ?: '—') . '</td>'
                        . '<td class="text-end">' . (int) $line['qty'] . '</td></tr>';
                 }
@@ -615,10 +663,53 @@ class StoreAdminPickwaves extends Controller
             echo '</div></div>';
 
             if ($isOpen) {
-                $this->renderScanScript($wid);
+                $this->renderScanScript($wid, $scanTotals, 'pick');
+                if ($packMode !== 'off') {
+                    $this->renderScanScript($wid, $packTotals, 'pack');
+                }
                 $this->renderPickSelectScript();
             }
         });
+    }
+
+    public function scanAction(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        if (!$this->request->isPost()) {
+            http_response_code(405);
+            echo json_encode(['ok' => false, 'error' => 'POST required']);
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'Session expired']);
+            return;
+        }
+
+        $id  = (int) $this->request->get('id', 'int', 0);
+        $sku = trim((string) $this->request->post('sku', 'string', ''));
+        $qty = max(1, (int) $this->request->post('qty', 'int', 1));
+        $stage = strtolower(trim((string) $this->request->post('stage', 'string', 'pick')));
+        if ($stage !== PickwaveService::STAGE_PACK) {
+            $stage = PickwaveService::STAGE_PICK;
+        }
+        try {
+            $uid = (int) ($this->auth->id() ?? 0) ?: null;
+            $this->service->recordScan($id, $sku, $qty, $uid, $stage);
+            $progress = $this->service->scanProgress($id, $stage);
+            $totals = $this->service->scanTotals($id, $stage);
+            echo json_encode([
+                'ok'       => true,
+                'stage'    => $stage,
+                'totals'   => $totals,
+                'progress' => $progress,
+            ]);
+        } catch (\Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
     }
 
     /**
@@ -757,25 +848,39 @@ class StoreAdminPickwaves extends Controller
         <?php
     }
 
-    private function renderScanScript(int $pickwaveId): void
+    /**
+     * @param array<string, int> $initialTotals
+     */
+    /**
+     * @param 'pick'|'pack' $stage
+     * @param array<string, int> $initialTotals
+     */
+    private function renderScanScript(int $pickwaveId, array $initialTotals = [], string $stage = 'pick'): void
     {
-        $key = 'store_pick_scan_' . $pickwaveId;
+        $scanUrl = $this->url->to('store/admin/pickwaves/scan', ['id' => $pickwaveId]);
+        $csrf = $this->request->csrfToken();
+        $isPack = $stage === 'pack';
+        $statusId = $isPack ? 'sf-pack-status' : 'sf-scan-status';
+        $skuId = $isPack ? 'sf-pack-sku' : 'sf-scan-sku';
+        $qtyId = $isPack ? 'sf-pack-qty' : 'sf-scan-qty';
+        $btnId = $isPack ? 'sf-pack-btn' : 'sf-scan-btn';
+        $paintPick = $isPack ? 'false' : 'true';
         ?>
         <script>
         (function () {
-          const storageKey = <?= json_encode($key) ?>;
-          const statusEl = document.getElementById('sf-scan-status');
-          const skuEl = document.getElementById('sf-scan-sku');
-          const qtyEl = document.getElementById('sf-scan-qty');
-          const btn = document.getElementById('sf-scan-btn');
-          let scanned = {};
-          try { scanned = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch (e) { scanned = {}; }
-
-          function persist() {
-            localStorage.setItem(storageKey, JSON.stringify(scanned));
-          }
+          const statusEl = document.getElementById(<?= json_encode($statusId) ?>);
+          const skuEl = document.getElementById(<?= json_encode($skuId) ?>);
+          const qtyEl = document.getElementById(<?= json_encode($qtyId) ?>);
+          const btn = document.getElementById(<?= json_encode($btnId) ?>);
+          const scanUrl = <?= json_encode($scanUrl) ?>;
+          const csrf = <?= json_encode($csrf) ?>;
+          const stage = <?= json_encode($isPack ? 'pack' : 'pick') ?>;
+          const paintPick = <?= $paintPick ?>;
+          let scanned = <?= json_encode($initialTotals) ?> || {};
+          let busy = false;
 
           function paint() {
+            if (!paintPick) return;
             document.querySelectorAll('#sf-pick-lines tr.sf-pick-line').forEach(function (tr) {
               const k = tr.getAttribute('data-scan-key') || '';
               const need = parseInt(tr.getAttribute('data-qty') || '0', 10) || 0;
@@ -792,44 +897,44 @@ class StoreAdminPickwaves extends Controller
           }
 
           function doScan() {
+            if (busy || !statusEl || !skuEl) return;
             const raw = (skuEl.value || '').trim();
-            const qty = Math.max(1, parseInt(qtyEl.value || '1', 10) || 1);
+            const qty = Math.max(1, parseInt((qtyEl && qtyEl.value) || '1', 10) || 1);
             if (!raw) {
               statusEl.textContent = 'Enter a SKU';
               statusEl.className = 'small text-danger';
               return;
             }
-            const needle = raw.toLowerCase();
-            const rows = Array.prototype.slice.call(
-              document.querySelectorAll('#sf-pick-lines tr.sf-pick-line')
-            );
-            let target = rows.find(function (tr) {
-              return (tr.getAttribute('data-sku') || '') === needle;
-            });
-            if (!target) {
-              target = rows.find(function (tr) {
-                return (tr.getAttribute('data-sku') || '').indexOf(needle) >= 0
-                  || (tr.getAttribute('data-scan-key') || '').indexOf(needle) >= 0;
-              });
-            }
-            if (!target) {
-              statusEl.textContent = 'SKU not in this pickwave';
-              statusEl.className = 'small text-danger';
-              skuEl.select();
-              return;
-            }
-            const k = target.getAttribute('data-scan-key') || needle;
-            const need = parseInt(target.getAttribute('data-qty') || '0', 10) || 0;
-            const next = Math.min(need, (parseInt(scanned[k] || '0', 10) || 0) + qty);
-            scanned[k] = next;
-            persist();
-            paint();
-            statusEl.textContent = 'Scanned ' + raw + ' (' + next + '/' + need + ')';
-            statusEl.className = 'small text-success';
-            skuEl.value = '';
-            qtyEl.value = '1';
-            skuEl.focus();
-            target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            busy = true;
+            statusEl.textContent = 'Saving…';
+            statusEl.className = 'small text-muted';
+            const body = new FormData();
+            body.append('sku', raw);
+            body.append('qty', String(qty));
+            body.append('stage', stage);
+            body.append('_token', csrf);
+            fetch(scanUrl, { method: 'POST', body: body, credentials: 'same-origin' })
+              .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+              .then(function (res) {
+                if (!res.ok || !res.j || !res.j.ok) {
+                  throw new Error((res.j && res.j.error) ? res.j.error : 'Scan failed');
+                }
+                scanned = res.j.totals || scanned;
+                paint();
+                const prog = res.j.progress || {};
+                statusEl.textContent = (stage === 'pack' ? 'Packed ' : 'Scanned ') + raw
+                  + ' · ' + (prog.scanned || 0) + '/' + (prog.needed || 0) + ' units confirmed';
+                statusEl.className = 'small text-success';
+                skuEl.value = '';
+                if (qtyEl) qtyEl.value = '1';
+                skuEl.focus();
+              })
+              .catch(function (err) {
+                statusEl.textContent = err.message || 'Scan failed';
+                statusEl.className = 'small text-danger';
+                skuEl.select();
+              })
+              .finally(function () { busy = false; });
           }
 
           paint();
@@ -1086,9 +1191,16 @@ class StoreAdminPickwaves extends Controller
         $id = (int) $this->request->get('id', 'int', 0);
         $createLabels = (string) $this->request->post('create_courier_labels', 'string', '') === '1'
             || (string) $this->request->post('create_evri_labels', 'string', '') === '1';
+        $packMode = strtolower(trim((string) $this->config->get('store.pack_confirm', 'hard')));
+        if (!in_array($packMode, ['hard', 'soft', 'off'], true)) {
+            $packMode = 'hard';
+        }
+        if ((string) $this->request->post('pack_soft', 'string', '') === '1') {
+            $packMode = 'soft';
+        }
 
         try {
-            $result = $this->service->despatch($id, $createLabels);
+            $result = $this->service->despatch($id, $createLabels, $packMode);
             $msg = 'Pickwave #' . $id . ' despatched. '
                 . $result['order_count'] . ' order(s) fulfilled';
             if (!empty($result['labels'])) {
@@ -1145,10 +1257,12 @@ class StoreAdminPickwaves extends Controller
                 echo '</header>';
 
                 echo '<table class="print-table">';
-                echo '<thead><tr><th style="width:3rem"></th><th>SKU</th><th>Title</th><th class="num">Qty</th></tr></thead><tbody>';
+                echo '<thead><tr><th style="width:3rem"></th><th>Bin</th><th>SKU</th><th>Title</th><th class="num">Qty</th></tr></thead><tbody>';
                 foreach ($lines as $line) {
+                    $bin = trim((string) ($line['pick_bin'] ?? ''));
                     echo '<tr>';
                     echo '<td class="tick">☐</td>';
+                    echo '<td>' . $this->view->e($bin !== '' ? $bin : '—') . '</td>';
                     echo '<td class="sku">' . $this->view->e($line['external_sku'] !== '' ? $line['external_sku'] : '—') . '</td>';
                     echo '<td>' . $this->view->e($line['title'] !== '' ? $line['title'] : '—') . '</td>';
                     echo '<td class="num">' . (int) $line['qty'] . '</td>';
@@ -1258,7 +1372,36 @@ class StoreAdminPickwaves extends Controller
             'status'          => ['label' => 'Status', 'default' => true],
         ];
 
+        $shipFrom = trim((string) $this->request->get('ship_by_from', 'string', ''));
+        $shipTo = trim((string) $this->request->get('ship_by_to', 'string', ''));
+        $shipMethod = trim((string) $this->request->get('shipping_method', 'string', ''));
+        $warehouse = trim((string) $this->request->get('warehouse', 'string', ''));
+        $priority = (string) $this->request->get('priority', 'string', '') === '1';
+
         echo '<div class="position-relative">';
+        echo '<form method="get" action="' . $this->view->e($this->url->to('store/admin/pickwaves'))
+           . '" class="border rounded bg-white p-2 mb-2 d-flex flex-wrap gap-2 align-items-end">';
+        echo '<input type="hidden" name="route" value="store/admin/pickwaves">';
+        echo '<input type="hidden" name="tab" value="overview">';
+        echo '<div><label class="form-label small mb-0">Ship-by from</label>'
+           . '<input type="date" class="form-control form-control-sm" name="ship_by_from" value="'
+           . $this->view->e($shipFrom) . '"></div>';
+        echo '<div><label class="form-label small mb-0">Ship-by to</label>'
+           . '<input type="date" class="form-control form-control-sm" name="ship_by_to" value="'
+           . $this->view->e($shipTo) . '"></div>';
+        echo '<div><label class="form-label small mb-0">Courier / method</label>'
+           . '<input type="text" class="form-control form-control-sm" name="shipping_method" value="'
+           . $this->view->e($shipMethod) . '" placeholder="e.g. Evri" style="width:9rem"></div>';
+        echo '<div><label class="form-label small mb-0">Warehouse</label>'
+           . '<input type="text" class="form-control form-control-sm" name="warehouse" value="'
+           . $this->view->e($warehouse) . '" style="width:8rem"></div>';
+        echo '<div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="priority" value="1" id="pw-priority"'
+           . ($priority ? ' checked' : '') . '>'
+           . '<label class="form-check-label small" for="pw-priority">Priority only</label></div>';
+        echo '<button type="submit" class="btn btn-sm btn-outline-secondary">Filter</button>';
+        echo '<button type="button" class="btn btn-sm btn-outline-primary" id="pw-suggest-btn">Suggest</button>';
+        echo '</form>';
+
         echo '<form method="post" action="' . $this->view->e($this->url->to('store/admin/pickwaves/create')) . '" id="pw-create-form">';
         echo $this->request->csrfField();
         echo '<div class="sf-pick-actions">';
@@ -1436,6 +1579,25 @@ class StoreAdminPickwaves extends Controller
   }
   orderBoxes().forEach(function (c) { c.addEventListener('change', syncSelect); });
   syncSelect();
+
+  const suggestBtn = document.getElementById('pw-suggest-btn');
+  if (suggestBtn) {
+    suggestBtn.addEventListener('click', function () {
+      const params = new URLSearchParams(window.location.search);
+      params.set('route', 'store/admin/pickwaves/suggest');
+      fetch('?' + params.toString(), { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j || !j.ok) throw new Error('Suggest failed');
+          const want = new Set((j.order_ids || []).map(String));
+          orderBoxes().forEach(function (c) { c.checked = want.has(String(c.value)); });
+          syncSelect();
+          suggestBtn.textContent = 'Suggested ' + (j.count || 0);
+          setTimeout(function () { suggestBtn.textContent = 'Suggest'; }, 2000);
+        })
+        .catch(function () { window.alert('Could not suggest orders.'); });
+    });
+  }
 })();
 </script>
 HTML;

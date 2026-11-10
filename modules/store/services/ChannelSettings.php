@@ -57,6 +57,22 @@ final class ChannelSettings
         return $fallback;
     }
 
+    public static function float(Channel $channel, string $key, float $fallback = 0.0): float
+    {
+        if (array_key_exists($key, $channel->settings)
+            && is_numeric($channel->settings[$key])
+        ) {
+            return (float) $channel->settings[$key];
+        }
+
+        $default = self::configDefault($channel->type, $key);
+        if (is_numeric($default)) {
+            return (float) $default;
+        }
+
+        return $fallback;
+    }
+
     private static function configDefault(string $type, string $key): mixed
     {
         $defaults = self::defaultsForType($type);

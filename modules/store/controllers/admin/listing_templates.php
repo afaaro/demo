@@ -150,6 +150,11 @@ class StoreAdminListingTemplates extends Controller
             'name'                 => $template?->name ?? '',
             'title_template'       => $template?->titleTemplate ?? '{{title}}',
             'description_template' => $template?->descriptionTemplate ?? $this->defaultDescriptionHtml(),
+            'attributes_json'      => $template !== null && $template->attributes !== []
+                ? (string) json_encode($template->attributes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                : ($channel->type === 'amazon'
+                    ? "{\n  \"product_type\": \"PRODUCT\",\n  \"brand\": \"{{product_name}}\"\n}"
+                    : ''),
             'is_default'           => $template?->isDefault ?? ($this->templates->forChannel($channelId) === []),
         ];
 
@@ -158,6 +163,7 @@ class StoreAdminListingTemplates extends Controller
                 'name'                 => trim((string) $this->request->post('name', 'string', '')),
                 'title_template'       => trim((string) $this->request->post('title_template', 'string', '')),
                 'description_template' => (string) $this->request->post('description_template', 'raw', ''),
+                'attributes_json'      => trim((string) $this->request->post('attributes_json', 'raw', '')),
                 'is_default'           => !empty($this->request->post('is_default', 'int', 0)),
             ];
 
@@ -217,6 +223,13 @@ class StoreAdminListingTemplates extends Controller
             echo '<div class="mb-3"><label class="form-label" for="description_template">Description template (HTML OK)</label>';
             echo '<textarea class="form-control font-monospace" name="description_template" id="description_template" rows="14">'
                . $this->view->e($old['description_template']) . '</textarea></div>';
+
+            echo '<div class="mb-3"><label class="form-label" for="attributes_json">Attribute map (JSON)</label>';
+            echo '<textarea class="form-control font-monospace" name="attributes_json" id="attributes_json" rows="8">'
+               . $this->view->e((string) ($old['attributes_json'] ?? '')) . '</textarea>';
+            echo '<div class="form-text">Optional key/value map merged into channel aspects on publish. '
+               . 'Amazon: use <code>product_type</code>, <code>brand</code>, <code>asin</code>, etc. '
+               . 'Values support {{product_name}}, {{sku}}, {{title}} placeholders.</div></div>';
 
             echo '<div class="form-check form-switch mb-4">'
                . '<input type="hidden" name="is_default" value="0">'

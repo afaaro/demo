@@ -85,6 +85,7 @@ final class ListingSyncService
         $fallbackTitle = $product->name !== '' ? $product->name : $variant->name;
         $fallbackDesc  = $product->description !== '' ? $product->description : $product->name;
 
+        // Templates apply to all marketplace channel types (eBay, Amazon, Shopify, B&Q).
         $rendered = (new ListingTemplateRenderer())->apply(
             $this->templates?->defaultForChannel((int) $channel->id),
             $fallbackTitle,
@@ -103,6 +104,10 @@ final class ListingSyncService
         );
 
         $aspects = $this->resolveAspects($channel, $product);
+        // Template attribute maps (esp. Amazon product_type / brand) overlay product aspects.
+        foreach (($rendered['attributes'] ?? []) as $attrKey => $attrVal) {
+            $aspects[(string) $attrKey] = (string) $attrVal;
+        }
 
         $variantData = [
             'sku'         => $sku,
@@ -185,6 +190,9 @@ final class ListingSyncService
                 'image_url'    => (string) ($product->image ?? ''),
             ],
         );
+        foreach (($rendered['attributes'] ?? []) as $attrKey => $attrVal) {
+            $commonAspects[(string) $attrKey] = (string) $attrVal;
+        }
 
         $specValues = []; // attr name => set of values
         $variantPayloads = [];
@@ -301,7 +309,54 @@ final class ListingSyncService
     /** @return array<string, list<string>> */
     private function resolveAspects(Channel $channel, Product $product): array
     {
+        $mapped = $this->categoryMapForProduct($channel, $product);
+        if ($mapped !== null && is_array($mapped['aspects'] ?? null) && $mapped['aspects'] !== []) {
+            /** @var array<string, list<string>> $aspects */
+            $aspects = [];
+            foreach ($mapped['aspects'] as $name => $values) {
+                $key = is_string($name) ? $name : (string) $name;
+                if (is_array($values)) {
+                    $aspects[$key] = array_values(array_map('strval', $values));
+                } elseif ($values !== null && $values !== '') {
+                    $aspects[$key] = [(string) $values];
+                }
+            }
+            if ($aspects !== []) {
+                return $aspects;
+            }
+        }
         return $this->channelAttributes->resolveForProduct($channel, $product);
+    }
+
+    /**
+     * Prefer store category → channel map over product ebay_category_id.
+     *
+     * @return array{external_category_id:string, aspects:?array}|null
+     */
+    private function categoryMapForProduct(Channel $channel, Product $product): ?array
+    {
+        if (!TenantContext::get()->has() || (int) ($product->id ?? 0) <= 0) {
+            return null;
+        }
+        try {
+            $maps = new CategoryMapRepository($this->db);
+            $rows = $this->db->query(
+                "SELECT `category_id` FROM `#__store_product_categories`
+                  WHERE `product_id` = ?",
+                [(int) $product->id]
+            )->rows;
+            foreach ($rows as $row) {
+                $map = $maps->findForCategoryChannel((int) $row['category_id'], (int) $channel->id);
+                if ($map !== null && trim((string) $map['external_category_id']) !== '') {
+                    return [
+                        'external_category_id' => (string) $map['external_category_id'],
+                        'aspects'              => is_array($map['aspects'] ?? null) ? $map['aspects'] : null,
+                    ];
+                }
+            }
+        } catch (\Throwable) {
+        }
+        return null;
     }
 
     /** @return list<string> */
@@ -333,7 +388,13 @@ final class ListingSyncService
         string $description,
         int $qty,
     ): array {
-        $categoryId = trim($product->ebayCategoryId);
+        $mapped = $this->categoryMapForProduct($channel, $product);
+        $categoryId = $mapped !== null
+            ? trim((string) $mapped['external_category_id'])
+            : '';
+        if ($categoryId === '') {
+            $categoryId = trim($product->ebayCategoryId);
+        }
         if ($categoryId === '') {
             $categoryId = (string) ($channel->settings['default_category_id'] ?? '');
         }
@@ -373,7 +434,11 @@ final class ListingSyncService
             throw new RuntimeException('Listing is not controlled by Store — inventory sync skipped.');
         }
 
-        $qty   = max(0, $this->inventory->sellableAvailable($variantId) + max(0, $listing->oversell));
+        $qty = max(0, $this->inventory->sellableAvailable($variantId) + max(0, $listing->oversell));
+        $channelBuffer = max(0, ChannelSettings::int($channel, 'sellable_buffer', 0));
+        $listingBuffer = max(0, $listing->qtyBuffer);
+        $buffer = max($channelBuffer, $listingBuffer);
+        $qty = max(0, $qty - $buffer);
         if ($qty <= 0 && !ChannelSettings::bool($channel, 'include_out_of_stock', true)) {
             throw new RuntimeException(
                 'Out-of-stock sync blocked: enable "Include Out of Stock Inventory?" on this integration.'
@@ -438,6 +503,22 @@ final class ListingSyncService
                 ? (float) $listing->price
                 : $price;
 
+            $guard = $this->priceFloorGuard($channel, $listing, $variantId, $pushPrice);
+            if ($guard !== null) {
+                $skipped++;
+                try {
+                    (new SyncLogRepository($this->db))->log(
+                        (int) $channel->id,
+                        'price_floor',
+                        'skipped',
+                        $guard,
+                        ['variant_id' => $variantId, 'price' => $pushPrice, 'sku' => $sku],
+                    );
+                } catch (\Throwable) {
+                }
+                continue;
+            }
+
             try {
                 $client = $this->factory->make($channel);
                 if (!method_exists($client, 'syncPrice')) {
@@ -458,6 +539,49 @@ final class ListingSyncService
         }
 
         return ['pushed' => $pushed, 'skipped' => $skipped, 'errors' => $errors];
+    }
+
+    /**
+     * Skip price push when below channel min_margin_pct or listing.min_price.
+     *
+     * @return string|null skip reason
+     */
+    private function priceFloorGuard(Channel $channel, Listing $listing, int $variantId, float $pushPrice): ?string
+    {
+        $minPrice = $listing->minPrice;
+        if ($minPrice !== null && $minPrice > 0 && $pushPrice + 0.0001 < $minPrice) {
+            return 'Price £' . number_format($pushPrice, 2)
+                . ' below listing floor £' . number_format($minPrice, 2);
+        }
+
+        $minMarginPct = ChannelSettings::float($channel, 'min_margin_pct', 0.0);
+        if ($minMarginPct <= 0) {
+            return null;
+        }
+
+        $cost = 0.0;
+        try {
+            $row = $this->db->query(
+                "SELECT `cost` FROM `#__store_product_variants` WHERE `id` = ? LIMIT 1",
+                [$variantId]
+            )->row;
+            $cost = (float) ($row['cost'] ?? 0);
+        } catch (\Throwable) {
+        }
+        if ($cost <= 0 || $pushPrice <= 0) {
+            return null;
+        }
+
+        $feePct = ChannelSettings::float($channel, 'channel_percentage_fee', 0.0);
+        $fee = $pushPrice * max(0, $feePct) / 100.0;
+        $margin = $pushPrice - $cost - $fee;
+        $marginPct = ($margin / $pushPrice) * 100.0;
+        if ($marginPct + 0.0001 < $minMarginPct) {
+            return 'Estimated margin '
+                . number_format($marginPct, 1) . '% below channel floor '
+                . number_format($minMarginPct, 1) . '%';
+        }
+        return null;
     }
 
     private function channelTenantAllowed(Channel $channel): bool

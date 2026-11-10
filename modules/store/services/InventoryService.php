@@ -271,6 +271,7 @@ final class InventoryService
 
     /**
      * Recompute reserved qty from open (unfulfilled) order lines.
+     * Uses remaining qty (qty - qty_shipped) when the column exists.
      * Safe to call after order sync / despatch / cancel.
      */
     public function rebuildReservedFromOpenOrders(): void
@@ -280,6 +281,7 @@ final class InventoryService
         }
 
         $tenantId = $this->tenantId();
+        $needExpr = 'COALESCE(SUM(GREATEST(CAST(i.`qty` AS SIGNED) - CAST(COALESCE(i.`qty_shipped`, 0) AS SIGNED), 0)), 0)';
 
         // Ensure inventory rows exist for any variant on open orders.
         $this->db->query(
@@ -296,7 +298,7 @@ final class InventoryService
         $this->db->query(
             "UPDATE `#__store_inventory` inv
                 LEFT JOIN (
-                    SELECT i.`variant_id`, COALESCE(SUM(i.`qty`), 0) AS need
+                    SELECT i.`variant_id`, {$needExpr} AS need
                       FROM `#__store_order_items` i
                       INNER JOIN `#__store_orders` o ON o.`id` = i.`order_id`
                      WHERE i.`variant_id` IS NOT NULL
@@ -316,7 +318,147 @@ final class InventoryService
     }
 
     /**
-     * After an order is fulfilled: deduct sold qty from stock, then refresh reserved.
+     * Compare inventory.reserved vs sum of open order line qtys.
+     *
+     * @return list<array{
+     *   variant_id:int, sku:string, product_name:string, product_id:int,
+     *   reserved:int, expected:int, delta:int, quantity:int
+     * }>
+     */
+    public function reservedIntegrityMismatches(int $limit = 200): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT inv.`variant_id`,
+                    COALESCE(inv.`reserved`, 0) AS reserved,
+                    COALESCE(inv.`quantity`, 0) AS quantity,
+                    COALESCE(x.`need`, 0) AS expected,
+                    v.`sku`,
+                    p.`name` AS product_name,
+                    p.`id` AS product_id
+               FROM `#__store_inventory` inv
+               JOIN `#__store_product_variants` v
+                 ON v.`id` = inv.`variant_id` AND v.`tenant_id` = inv.`tenant_id`
+               JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = inv.`tenant_id`
+               LEFT JOIN (
+                    SELECT i.`variant_id`,
+                           COALESCE(SUM(GREATEST(CAST(i.`qty` AS SIGNED) - CAST(COALESCE(i.`qty_shipped`, 0) AS SIGNED), 0)), 0) AS need
+                      FROM `#__store_order_items` i
+                      INNER JOIN `#__store_orders` o ON o.`id` = i.`order_id`
+                     WHERE i.`variant_id` IS NOT NULL
+                       AND i.`variant_id` > 0
+                       AND o.`tenant_id` = ?
+                       AND UPPER(o.`status`) NOT IN ('FULFILLED', 'CANCELLED', 'CANCELED')
+                     GROUP BY i.`variant_id`
+               ) x ON x.`variant_id` = inv.`variant_id`
+              WHERE inv.`tenant_id` = ?
+                AND COALESCE(inv.`reserved`, 0) <> COALESCE(x.`need`, 0)
+              ORDER BY ABS(COALESCE(inv.`reserved`, 0) - COALESCE(x.`need`, 0)) DESC
+              LIMIT ?",
+            [$tid, $tid, $limit]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $reserved = (int) ($row['reserved'] ?? 0);
+            $expected = (int) ($row['expected'] ?? 0);
+            $out[] = [
+                'variant_id'   => (int) ($row['variant_id'] ?? 0),
+                'sku'          => (string) ($row['sku'] ?? ''),
+                'product_name' => (string) ($row['product_name'] ?? ''),
+                'product_id'   => (int) ($row['product_id'] ?? 0),
+                'reserved'     => $reserved,
+                'expected'     => $expected,
+                'delta'        => $reserved - $expected,
+                'quantity'     => (int) ($row['quantity'] ?? 0),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Active variants with empty pick_bin that have stock or open order demand.
+     *
+     * @return list<array{
+     *   variant_id:int, product_id:int, sku:string, product_name:string,
+     *   pick_bin:string, quantity:int, reserved:int, open_demand:int
+     * }>
+     */
+    public function missingPickBins(int $limit = 200): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $rows = $this->db->query(
+            "SELECT v.`id` AS variant_id, p.`id` AS product_id, v.`sku`, p.`name` AS product_name,
+                    COALESCE(v.`pick_bin`, '') AS pick_bin,
+                    COALESCE(inv.`quantity`, 0) AS quantity,
+                    COALESCE(inv.`reserved`, 0) AS reserved,
+                    COALESCE(d.`open_demand`, 0) AS open_demand
+               FROM `#__store_product_variants` v
+               JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = v.`tenant_id`
+               LEFT JOIN `#__store_inventory` inv
+                 ON inv.`variant_id` = v.`id` AND inv.`tenant_id` = v.`tenant_id`
+               LEFT JOIN (
+                    SELECT i.`variant_id`, SUM(i.`qty`) AS open_demand
+                      FROM `#__store_order_items` i
+                      JOIN `#__store_orders` o ON o.`id` = i.`order_id`
+                     WHERE o.`tenant_id` = ?
+                       AND i.`variant_id` IS NOT NULL AND i.`variant_id` > 0
+                       AND UPPER(o.`status`) NOT IN ('FULFILLED', 'CANCELLED', 'CANCELED')
+                     GROUP BY i.`variant_id`
+               ) d ON d.`variant_id` = v.`id`
+              WHERE v.`tenant_id` = ?
+                AND v.`active` = 1 AND p.`active` = 1
+                AND TRIM(COALESCE(v.`pick_bin`, '')) = ''
+                AND (
+                  COALESCE(inv.`quantity`, 0) > 0
+                  OR COALESCE(d.`open_demand`, 0) > 0
+                )
+              ORDER BY COALESCE(d.`open_demand`, 0) DESC, COALESCE(inv.`quantity`, 0) DESC, v.`sku` ASC
+              LIMIT ?",
+            [$tid, $tid, $limit]
+        )->rows;
+
+        return array_map(static fn(array $r): array => [
+            'variant_id'   => (int) ($r['variant_id'] ?? 0),
+            'product_id'   => (int) ($r['product_id'] ?? 0),
+            'sku'          => (string) ($r['sku'] ?? ''),
+            'product_name' => (string) ($r['product_name'] ?? ''),
+            'pick_bin'     => (string) ($r['pick_bin'] ?? ''),
+            'quantity'     => (int) ($r['quantity'] ?? 0),
+            'reserved'     => (int) ($r['reserved'] ?? 0),
+            'open_demand'  => (int) ($r['open_demand'] ?? 0),
+        ], $rows);
+    }
+
+    public function setPickBin(int $variantId, string $pickBin): void
+    {
+        if ($variantId <= 0 || !TenantContext::get()->has()) {
+            throw new \InvalidArgumentException('Invalid variant.');
+        }
+        if (!$this->variantBelongsToTenant($variantId)) {
+            throw new \RuntimeException('Variant not found.');
+        }
+        $this->db->query(
+            "UPDATE `#__store_product_variants`
+                SET `pick_bin` = ?
+              WHERE `id` = ? AND `tenant_id` = ?",
+            [mb_substr(trim($pickBin), 0, 64), $variantId, $this->tenantId()]
+        );
+    }
+
+    /**
+     * After an order is fulfilled: deduct remaining unshipped qty from stock, then refresh reserved.
+     * Prefer consumeShippedQuantities for partial despatch.
      */
     public function consumeFulfilledOrder(int $orderId): void
     {
@@ -324,28 +466,351 @@ final class InventoryService
             return;
         }
 
-        if ($this->db->first('store_orders', $this->withTenant(['id' => $orderId])) === []) {
+        $order = $this->db->first('store_orders', $this->withTenant(['id' => $orderId]));
+        if ($order === []) {
             return;
         }
 
         $rows = $this->db->query(
-            "SELECT `variant_id`, `qty`
+            "SELECT `variant_id`,
+                    GREATEST(CAST(`qty` AS SIGNED) - CAST(COALESCE(`qty_shipped`, 0) AS SIGNED), 0) AS remain,
+                    `qty`, COALESCE(`qty_shipped`, 0) AS qty_shipped
                FROM `#__store_order_items`
               WHERE `order_id` = ?
                 AND `variant_id` IS NOT NULL",
             [$orderId]
         )->rows;
 
+        $lines = [];
         foreach ($rows as $row) {
             $vid = (int) ($row['variant_id'] ?? 0);
+            // If qty_shipped already covers qty, nothing left; else consume remain
+            // (legacy full-fulfil path may have qty_shipped=0 → consume full qty).
+            $qtyShipped = (int) ($row['qty_shipped'] ?? 0);
             $qty = max(0, (int) ($row['qty'] ?? 0));
+            $consume = $qtyShipped > 0
+                ? max(0, (int) ($row['remain'] ?? 0))
+                : $qty;
+            if ($vid <= 0 || $consume <= 0) {
+                continue;
+            }
+            $lines[] = ['variant_id' => $vid, 'qty' => $consume];
+        }
+
+        $this->consumeShippedQuantities(
+            $orderId,
+            $lines,
+            (string) ($order['warehouse'] ?? '')
+        );
+    }
+
+    /**
+     * Deduct specifically shipped quantities (partial or full).
+     *
+     * @param list<array{variant_id:int, qty:int}> $lines
+     */
+    public function consumeShippedQuantities(int $orderId, array $lines, string $warehouse = ''): void
+    {
+        if ($orderId <= 0 || !TenantContext::get()->has() || $lines === []) {
+            return;
+        }
+
+        $warehouseId = $this->resolveWarehouseId($warehouse);
+        foreach ($lines as $line) {
+            $vid = (int) ($line['variant_id'] ?? 0);
+            $qty = max(0, (int) ($line['qty'] ?? 0));
             if ($vid <= 0 || $qty <= 0) {
                 continue;
             }
             $this->adjust($vid, -$qty, 'order_despatch', 'Order #' . $orderId);
+            if ($warehouseId > 0) {
+                $this->adjustAtWarehouse($vid, $warehouseId, -$qty, 'order_despatch', 'Order #' . $orderId);
+            }
         }
 
         $this->rebuildReservedFromOpenOrders();
+    }
+
+    /**
+     * Location-level stock for a variant at a warehouse.
+     *
+     * @return array{variant_id:int, warehouse_id:int, quantity:int, reserved:int, available:int}|null
+     */
+    public function getAtWarehouse(int $variantId, int $warehouseId): ?array
+    {
+        if (!TenantContext::get()->has() || $variantId <= 0 || $warehouseId <= 0
+            || !$this->variantBelongsToTenant($variantId)
+        ) {
+            return null;
+        }
+        $row = $this->db->query(
+            "SELECT `variant_id`, `warehouse_id`, `quantity`, `reserved`
+               FROM `#__store_inventory_locations`
+              WHERE `variant_id` = ? AND `warehouse_id` = ? AND `tenant_id` = ?
+              LIMIT 1",
+            [$variantId, $warehouseId, $this->tenantId()]
+        )->row;
+        if ($row === [] || $row === null) {
+            return [
+                'variant_id'   => $variantId,
+                'warehouse_id' => $warehouseId,
+                'quantity'     => 0,
+                'reserved'     => 0,
+                'available'    => 0,
+            ];
+        }
+        $qty = (int) $row['quantity'];
+        $res = (int) $row['reserved'];
+        return [
+            'variant_id'   => (int) $row['variant_id'],
+            'warehouse_id' => (int) $row['warehouse_id'],
+            'quantity'     => $qty,
+            'reserved'     => $res,
+            'available'    => $qty - $res,
+        ];
+    }
+
+    /**
+     * Adjust location qty and keep aggregate `#__store_inventory` in sync when delta applied only to location.
+     * When called from consumeShippedQuantities, aggregate is already adjusted separately.
+     */
+    public function adjustAtWarehouse(
+        int $variantId,
+        int $warehouseId,
+        int $delta,
+        string $reason = 'manual',
+        string $note = '',
+        ?int $userId = null,
+        bool $syncAggregate = false,
+    ): int {
+        if (!$this->variantBelongsToTenant($variantId) || $warehouseId <= 0) {
+            return 0;
+        }
+        $tenantId = $this->tenantId();
+        $quantity = $this->db->transaction(function (Database $db) use (
+            $variantId, $warehouseId, $delta, $reason, $note, $userId, $tenantId
+        ) {
+            $db->query(
+                "INSERT IGNORE INTO `#__store_inventory_locations`
+                    (`tenant_id`, `variant_id`, `warehouse_id`, `quantity`, `reserved`)
+                 VALUES (?, ?, ?, 0, 0)",
+                [$tenantId, $variantId, $warehouseId]
+            );
+            $db->query(
+                "UPDATE `#__store_inventory_locations`
+                    SET `quantity` = `quantity` + ?
+                  WHERE `variant_id` = ? AND `warehouse_id` = ? AND `tenant_id` = ?",
+                [$delta, $variantId, $warehouseId, $tenantId]
+            );
+            $db->insert('store_stock_movements', $this->withTenant([
+                'variant_id' => $variantId,
+                'delta'      => $delta,
+                'reason'     => $reason,
+                'note'       => mb_substr(trim($note . ' wh#' . $warehouseId), 0, 255),
+                'user_id'    => $userId,
+            ]));
+            return (int) $db->query(
+                "SELECT `quantity` FROM `#__store_inventory_locations`
+                  WHERE `variant_id` = ? AND `warehouse_id` = ? AND `tenant_id` = ?",
+                [$variantId, $warehouseId, $tenantId]
+            )->value;
+        });
+
+        if ($syncAggregate) {
+            $this->adjust($variantId, $delta, $reason, $note !== '' ? $note : 'Warehouse adjust', $userId);
+        }
+
+        return $quantity;
+    }
+
+    /**
+     * Transfer stock between warehouses (location + aggregate-neutral).
+     *
+     * @return array{from_qty:int, to_qty:int}
+     */
+    public function transferBetweenWarehouses(
+        int $variantId,
+        int $fromWarehouseId,
+        int $toWarehouseId,
+        int $qty,
+        ?int $userId = null,
+        string $note = '',
+    ): array {
+        $qty = max(0, $qty);
+        if ($qty <= 0) {
+            throw new \InvalidArgumentException('Transfer qty must be positive.');
+        }
+        if ($fromWarehouseId <= 0 || $toWarehouseId <= 0 || $fromWarehouseId === $toWarehouseId) {
+            throw new \InvalidArgumentException('Distinct from/to warehouses required.');
+        }
+        if (!$this->variantBelongsToTenant($variantId)) {
+            throw new \RuntimeException('Variant not found.');
+        }
+
+        $from = $this->getAtWarehouse($variantId, $fromWarehouseId);
+        $available = (int) ($from['available'] ?? 0);
+        // Allow transfer even if location row empty but aggregate has stock (bootstrap).
+        if ($available < $qty) {
+            $agg = (int) ($this->get($variantId)['available'] ?? 0);
+            if ($available <= 0 && $agg >= $qty) {
+                // Seed location from aggregate for the from warehouse.
+                $this->adjustAtWarehouse(
+                    $variantId,
+                    $fromWarehouseId,
+                    $qty,
+                    'transfer_seed',
+                    'Seed location for transfer',
+                    $userId,
+                    false
+                );
+            } elseif ($available < $qty) {
+                throw new \RuntimeException('Insufficient warehouse stock to transfer (' . $available . ' available).');
+            }
+        }
+
+        $fromQty = $this->adjustAtWarehouse(
+            $variantId,
+            $fromWarehouseId,
+            -$qty,
+            'transfer_out',
+            $note !== '' ? $note : 'Transfer to wh#' . $toWarehouseId,
+            $userId,
+            false
+        );
+        $toQty = $this->adjustAtWarehouse(
+            $variantId,
+            $toWarehouseId,
+            $qty,
+            'transfer_in',
+            $note !== '' ? $note : 'Transfer from wh#' . $fromWarehouseId,
+            $userId,
+            false
+        );
+
+        return ['from_qty' => $fromQty, 'to_qty' => $toQty];
+    }
+
+    /**
+     * Relocate pick bin and audit the move.
+     */
+    public function relocateBin(int $variantId, string $fromBin, string $toBin, ?int $userId = null, string $note = ''): void
+    {
+        if ($variantId <= 0 || !TenantContext::get()->has()) {
+            throw new \InvalidArgumentException('Invalid variant.');
+        }
+        if (!$this->variantBelongsToTenant($variantId)) {
+            throw new \RuntimeException('Variant not found.');
+        }
+        $toBin = mb_substr(trim($toBin), 0, 64);
+        if ($toBin === '') {
+            throw new \InvalidArgumentException('Destination bin is required.');
+        }
+        $fromBin = mb_substr(trim($fromBin), 0, 64);
+        if ($fromBin === '') {
+            $row = $this->db->query(
+                "SELECT `pick_bin` FROM `#__store_product_variants`
+                  WHERE `id` = ? AND `tenant_id` = ? LIMIT 1",
+                [$variantId, $this->tenantId()]
+            )->row;
+            $fromBin = trim((string) ($row['pick_bin'] ?? ''));
+        }
+
+        $this->setPickBin($variantId, $toBin);
+
+        $this->db->insert('store_bin_moves', $this->withTenant([
+            'variant_id' => $variantId,
+            'from_bin'   => $fromBin,
+            'to_bin'     => $toBin,
+            'user_id'    => $userId,
+            'note'       => mb_substr(trim($note), 0, 255),
+            'created_at' => date('Y-m-d H:i:s'),
+        ]));
+
+        $this->db->insert('store_stock_movements', $this->withTenant([
+            'variant_id' => $variantId,
+            'delta'      => 0,
+            'reason'     => 'bin_relocate',
+            'note'       => mb_substr(($fromBin !== '' ? $fromBin . ' → ' : '→ ') . $toBin
+                . ($note !== '' ? ' · ' . $note : ''), 0, 255),
+            'user_id'    => $userId,
+        ]));
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function binMoveHistory(int $limit = 50, ?int $variantId = null): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        $params = [$this->tenantId()];
+        $sql = "SELECT m.*, v.`sku`, p.`name` AS product_name, p.`id` AS product_id
+                  FROM `#__store_bin_moves` m
+                  INNER JOIN `#__store_product_variants` v
+                    ON v.`id` = m.`variant_id` AND v.`tenant_id` = m.`tenant_id`
+                  INNER JOIN `#__store_products` p
+                    ON p.`id` = v.`product_id` AND p.`tenant_id` = m.`tenant_id`
+                 WHERE m.`tenant_id` = ?";
+        if ($variantId !== null && $variantId > 0) {
+            $sql .= ' AND m.`variant_id` = ?';
+            $params[] = $variantId;
+        }
+        $sql .= ' ORDER BY m.`id` DESC LIMIT ' . $limit;
+        return $this->db->query($sql, $params)->rows;
+    }
+
+    /**
+     * Location qty rows for a variant.
+     *
+     * @return list<array{warehouse_id:int, warehouse:string, quantity:int, reserved:int, available:int}>
+     */
+    public function locationsForVariant(int $variantId): array
+    {
+        if ($variantId <= 0 || !TenantContext::get()->has()) {
+            return [];
+        }
+        $rows = $this->db->query(
+            "SELECT loc.`warehouse_id`, w.`name` AS warehouse,
+                    loc.`quantity`, loc.`reserved`
+               FROM `#__store_inventory_locations` loc
+               INNER JOIN `#__store_warehouses` w
+                 ON w.`id` = loc.`warehouse_id` AND w.`tenant_id` = loc.`tenant_id`
+              WHERE loc.`variant_id` = ? AND loc.`tenant_id` = ?
+              ORDER BY w.`name` ASC",
+            [$variantId, $this->tenantId()]
+        )->rows;
+        return array_map(static function (array $r): array {
+            $qty = (int) ($r['quantity'] ?? 0);
+            $res = (int) ($r['reserved'] ?? 0);
+            return [
+                'warehouse_id' => (int) ($r['warehouse_id'] ?? 0),
+                'warehouse'    => (string) ($r['warehouse'] ?? ''),
+                'quantity'     => $qty,
+                'reserved'     => $res,
+                'available'    => $qty - $res,
+            ];
+        }, $rows);
+    }
+
+    private function resolveWarehouseId(string $warehouse): int
+    {
+        $warehouse = trim($warehouse);
+        if ($warehouse === '' || !TenantContext::get()->has()) {
+            return 0;
+        }
+        try {
+            $name = (new WarehouseRepository($this->db))->ensure($warehouse);
+            $row = $this->db->query(
+                "SELECT `id` FROM `#__store_warehouses`
+                  WHERE `name` = ? AND `tenant_id` = ? LIMIT 1",
+                [$name, $this->tenantId()]
+            )->row;
+            return (int) ($row['id'] ?? 0);
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 
     /**

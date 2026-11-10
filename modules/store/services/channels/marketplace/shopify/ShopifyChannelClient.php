@@ -195,14 +195,61 @@ final class ShopifyChannelClient implements ChannelClientInterface
         ];
     }
 
+    /**
+     * Shopify Admin has no general buyer messaging API equivalent to eBay/Amazon.
+     * Return an empty page so ConversationSyncService can complete without crashing.
+     *
+     * @return array{
+     *     conversations: array<int, array<string, mixed>>,
+     *     limit: int,
+     *     offset: int,
+     *     total: int,
+     *     next?: null
+     * }
+     */
     public function fetchConversations(
         int $limit = 25,
         int|string $offset = 0,
         string $conversationType = 'FROM_MEMBERS',
         string $status = '',
     ): array {
-        unset($limit, $offset, $conversationType, $status);
-        throw new NotSupportedException('Shopify messaging is not implemented yet.');
+        unset($offset, $conversationType, $status);
+        $limit = max(1, min(100, $limit));
+        return [
+            'conversations' => [],
+            'limit'         => $limit,
+            'offset'        => 0,
+            'total'         => 0,
+            'next'          => null,
+        ];
+    }
+
+    /**
+     * @return array{messages: list<array<string, mixed>>}
+     */
+    public function fetchConversation(
+        string $conversationId,
+        string $conversationType = 'FROM_MEMBERS',
+    ): array {
+        unset($conversationId, $conversationType);
+        return ['messages' => []];
+    }
+
+    /**
+     * Shopify does not expose a seller↔buyer messaging send API in this integration.
+     *
+     * @return array<string, mixed>
+     */
+    public function sendMessage(
+        string $conversationId,
+        string $conversationType,
+        string $body,
+    ): array {
+        unset($conversationId, $conversationType, $body);
+        throw new RuntimeException(
+            'Shopify Admin API does not provide buyer messaging send in this Store integration. '
+            . 'Use Shopify Inbox / customer email outside Store.'
+        );
     }
 
     /**

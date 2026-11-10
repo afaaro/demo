@@ -123,6 +123,10 @@ final class InventoryPlannerService
         )->rows;
 
         $soldMap = $this->soldQtyByVariant($this->maxSoldDaysNeeded($rows));
+        $bufferMap = $this->bufferByVariant(array_map(
+            static fn(array $r): int => (int) ($r['variant_id'] ?? 0),
+            $rows
+        ));
         $groups = [];
 
         foreach ($rows as $row) {
@@ -139,6 +143,14 @@ final class InventoryPlannerService
 
             $calcReorder = $this->calculatedReorderLevel($sold365, $lead);
             $suggest = $this->suggestQty($mode, $available, $onPo, $reserved, $reorderAt, $calcReorder, $soldInWindow);
+
+            // Buffers (listing qty_buffer + channel sellable_buffer) increase suggested PO qty.
+            $buffer = (int) ($bufferMap[$vid] ?? 0);
+            if ($buffer > 0 && $suggest > 0) {
+                $suggest += $buffer;
+            } elseif ($buffer > 0 && $suggest <= 0 && $available <= ($reorderAt + $buffer)) {
+                $suggest = $buffer;
+            }
 
             if ($suggest <= 0) {
                 continue;
@@ -197,8 +209,10 @@ final class InventoryPlannerService
                 'sold_days'        => $soldDays,
                 'cost'             => $cost,
                 'suggested_qty'    => $suggest,
+                'buffer'           => $buffer,
                 'line_total'       => $lineTotal,
-                'reason'           => $this->reasonLabel($mode, $available, $reorderAt, $calcReorder, $soldInWindow, $soldDays, $reserved),
+                'reason'           => $this->reasonLabel($mode, $available, $reorderAt, $calcReorder, $soldInWindow, $soldDays, $reserved)
+                    . ($buffer > 0 ? ' (+' . $buffer . ' buffer)' : ''),
             ];
             $groups[$supplierName]['product_count']++;
             $groups[$supplierName]['unit_count'] += $suggest;
@@ -268,6 +282,60 @@ final class InventoryPlannerService
         // Daily average over ~365 days × lead time (rounded down).
         $daily = $sold365 / 365.0;
         return (int) floor($daily * max(1, $leadDays));
+    }
+
+    /**
+     * Max listing qty_buffer + max channel sellable_buffer per variant.
+     *
+     * @param list<int> $variantIds
+     * @return array<int, int>
+     */
+    private function bufferByVariant(array $variantIds): array
+    {
+        $variantIds = array_values(array_unique(array_filter(
+            array_map('intval', $variantIds),
+            static fn(int $id): bool => $id > 0
+        )));
+        if ($variantIds === [] || !TenantContext::get()->has()) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($variantIds), '?'));
+        $params = array_merge($variantIds, [$this->tenantId()]);
+        $rows = $this->db->query(
+            "SELECT l.`variant_id`,
+                    COALESCE(MAX(l.`qty_buffer`), 0) AS listing_buffer
+               FROM `#__store_listings` l
+              WHERE l.`variant_id` IN ({$placeholders})
+                AND l.`tenant_id` = ?
+              GROUP BY l.`variant_id`",
+            $params
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $out[(int) $row['variant_id']] = max(0, (int) ($row['listing_buffer'] ?? 0));
+        }
+
+        // Channel sellable_buffer: take max across enabled non-courier channels.
+        try {
+            $channels = new ChannelRepository($this->db);
+            $channelBuffer = 0;
+            foreach ($channels->enabled() as $ch) {
+                if (in_array($ch->type, CourierShipmentService::COURIER_TYPES, true)) {
+                    continue;
+                }
+                $channelBuffer = max($channelBuffer, max(0, ChannelSettings::int($ch, 'sellable_buffer', 0)));
+            }
+            if ($channelBuffer > 0) {
+                foreach ($variantIds as $vid) {
+                    $out[$vid] = (int) ($out[$vid] ?? 0) + $channelBuffer;
+                }
+            }
+        } catch (\Throwable) {
+        }
+
+        return $out;
     }
 
     private function reasonLabel(

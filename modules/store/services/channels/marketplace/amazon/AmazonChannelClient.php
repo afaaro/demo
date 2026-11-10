@@ -212,6 +212,11 @@ final class AmazonChannelClient implements ChannelClientInterface
     /**
      * @param array<string, mixed> $variantData
      */
+    /**
+     * Create/update a Listings Items payload. Title and description in $variantData
+     * are expected to already be rendered by ListingTemplateRenderer when a template
+     * exists for this Amazon channel (see ListingSyncService::pushSingleVariant).
+     */
     public function pushVariant(int $variantId, array $variantData): string
     {
         $sku = trim((string) ($variantData['sku'] ?? ''));
@@ -824,6 +829,112 @@ final class AmazonChannelClient implements ChannelClientInterface
         }
 
         return $out;
+    }
+
+    /**
+     * Sum absolute fee amounts per Amazon order id from Finances shipment events.
+     *
+     * @return array<string, float> external_order_id => fee total
+     */
+    public function fetchOrderFeeTotals(int $lookbackDays = 30): array
+    {
+        $lookbackDays = max(1, min(180, $lookbackDays));
+        $postedBefore = gmdate('Y-m-d\TH:i:s\Z', time() - 120);
+        $postedAfter = gmdate('Y-m-d\TH:i:s\Z', time() - 120 - ($lookbackDays * 86400));
+
+        $out = [];
+        $token = null;
+        for ($page = 0; $page < 20; $page++) {
+            $pageData = $this->api()->listFinancialEvents(
+                $postedAfter,
+                $postedBefore,
+                100,
+                $token,
+            );
+            $events = $pageData['events'];
+            foreach (['ShipmentEventList', 'ShipmentSettleEventList', 'RefundEventList'] as $listKey) {
+                $list = $events[$listKey] ?? [];
+                if (!is_array($list)) {
+                    continue;
+                }
+                foreach ($list as $event) {
+                    if (!is_array($event)) {
+                        continue;
+                    }
+                    $orderId = trim((string) ($event['AmazonOrderId'] ?? ''));
+                    if ($orderId === '') {
+                        continue;
+                    }
+                    $fee = $this->sumShipmentFeeOnly($event);
+                    if ($fee <= 0) {
+                        continue;
+                    }
+                    $out[$orderId] = round(($out[$orderId] ?? 0) + $fee, 2);
+                }
+            }
+            $token = $pageData['nextToken'];
+            if ($token === null || $token === '') {
+                break;
+            }
+            usleep(600_000);
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $event
+     */
+    private function sumShipmentFeeOnly(array $event): float
+    {
+        $total = 0.0;
+        $buckets = [
+            $event['ShipmentFeeList'] ?? null,
+            $event['ShipmentFeeAdjustmentList'] ?? null,
+            $event['OrderFeeList'] ?? null,
+            $event['OrderFeeAdjustmentList'] ?? null,
+        ];
+        foreach ($buckets as $list) {
+            if (!is_array($list)) {
+                continue;
+            }
+            foreach ($list as $charge) {
+                if (!is_array($charge)) {
+                    continue;
+                }
+                $money = is_array($charge['FeeAmount'] ?? null) ? $charge['FeeAmount'] : null;
+                if (!is_array($money) || !isset($money['CurrencyAmount'])) {
+                    continue;
+                }
+                $total += abs((float) $money['CurrencyAmount']);
+            }
+        }
+
+        $items = $event['ShipmentItemList'] ?? $event['ShipmentItemAdjustmentList'] ?? [];
+        if (is_array($items)) {
+            foreach ($items as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                foreach (['ItemFeeList', 'ItemFeeAdjustmentList'] as $key) {
+                    $list = $item[$key] ?? null;
+                    if (!is_array($list)) {
+                        continue;
+                    }
+                    foreach ($list as $charge) {
+                        if (!is_array($charge)) {
+                            continue;
+                        }
+                        $money = is_array($charge['FeeAmount'] ?? null) ? $charge['FeeAmount'] : null;
+                        if (!is_array($money) || !isset($money['CurrencyAmount'])) {
+                            continue;
+                        }
+                        $total += abs((float) $money['CurrencyAmount']);
+                    }
+                }
+            }
+        }
+
+        return round($total, 2);
     }
 
     /**

@@ -29,8 +29,10 @@ return [
     // soomaali.net Live feed: when 127.0.0.1:9997 is unreachable, fetch from home.
     // Home WAMP ignores this (local MediaMTX API is reachable).
     'stats_upstream'     => 'http://afaaro.myvnc.com/demo/index.php?route=livestream/telemetry',
-    // ffmpeg re-encodes publisher → {slug}_h264 for the website (H.264+AAC).
+    // ffmpeg → {slug}_h264 for broken CDN ingest (non-monotonic DTS).
+    // afaaro stays on raw path; only listed slugs use {_h264} for the website.
     'hls_transcode_h264' => true,
+    'hls_transcode_slugs' => ['mogadishu'],
     'transcode_key'      => 'soomaali-hls-transcode',
     // Shared secret for MediaMTX runOnReady / runOnNotReady hooks.
     'webhook_secret'   => 'change-me-livestream-webhook',

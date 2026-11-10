@@ -205,6 +205,7 @@ final class OrderRepository
         $columns = [
             'warehouse'              => "varchar(128) NOT NULL DEFAULT 'Default'",
             'mapped_shipping_method' => "varchar(128) NOT NULL DEFAULT ''",
+            'preferred_courier'      => "varchar(32) NOT NULL DEFAULT ''",
             'special_instructions'   => "varchar(500) NOT NULL DEFAULT ''",
             'billing_address'        => 'json NULL',
             'packaging_size_id'      => 'int unsigned NULL',
@@ -857,5 +858,134 @@ final class OrderRepository
 
         $where = $clauses === [] ? '' : ' WHERE ' . implode(' AND ', $clauses);
         return [$where, $params];
+    }
+
+    /**
+     * Open orders bucketed by ship-by date (from shipping_address._ship_by).
+     *
+     * @param 'overdue'|'today'|'upcoming'|'all' $bucket
+     * @return list<array<string, mixed>>
+     */
+    public function shipByQueue(string $bucket = 'all', int $limit = 200): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $tid = $this->tenantId();
+        $shipExpr = "JSON_UNQUOTE(JSON_EXTRACT(o.`shipping_address`, '\$._ship_by'))";
+        $clauses = [
+            'o.`tenant_id` = ?',
+            "UPPER(o.`status`) NOT IN ('FULFILLED', 'CANCELLED', 'CANCELED')",
+            "{$shipExpr} IS NOT NULL",
+            "{$shipExpr} <> ''",
+        ];
+        $params = [$tid];
+        $bucket = strtolower(trim($bucket));
+        if ($bucket === 'overdue') {
+            $clauses[] = "{$shipExpr} < CURDATE()";
+        } elseif ($bucket === 'today') {
+            $clauses[] = "{$shipExpr} = CURDATE()";
+        } elseif ($bucket === 'upcoming') {
+            $clauses[] = "{$shipExpr} > CURDATE()";
+        }
+        $sql = "SELECT o.*, c.`label` AS channel_label, c.`name` AS channel_name,
+                       {$shipExpr} AS ship_by
+                  FROM `#__store_orders` o
+                  LEFT JOIN `#__store_channels` c
+                    ON c.`id` = o.`channel_id` AND c.`tenant_id` = o.`tenant_id`
+                 WHERE " . implode(' AND ', $clauses) . "
+                 ORDER BY {$shipExpr} ASC, o.`id` ASC
+                 LIMIT ?";
+        $params[] = $limit;
+        return $this->db->query($sql, $params)->rows;
+    }
+
+    /**
+     * Order items on open orders with null/0 variant_id.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function unmappedItems(int $limit = 200): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        return $this->db->query(
+            "SELECT i.`id` AS item_id, i.`order_id`, i.`external_sku`, i.`title`, i.`qty`, i.`price`,
+                    i.`variant_id`, o.`external_order_id`, o.`status`, o.`channel_id`,
+                    c.`label` AS channel_label, o.`created_at`
+               FROM `#__store_order_items` i
+               JOIN `#__store_orders` o
+                 ON o.`id` = i.`order_id` AND o.`tenant_id` = i.`tenant_id`
+               LEFT JOIN `#__store_channels` c
+                 ON c.`id` = o.`channel_id` AND c.`tenant_id` = o.`tenant_id`
+              WHERE i.`tenant_id` = ?
+                AND (i.`variant_id` IS NULL OR i.`variant_id` = 0)
+                AND UPPER(o.`status`) NOT IN ('FULFILLED', 'CANCELLED', 'CANCELED')
+              ORDER BY o.`created_at` ASC, i.`id` ASC
+              LIMIT ?",
+            [$this->tenantId(), $limit]
+        )->rows;
+    }
+
+    /**
+     * Persist variant mapping on an order item; optionally ensure a listing link.
+     */
+    public function mapItemVariant(int $itemId, int $variantId, bool $linkListing = false): void
+    {
+        if ($itemId <= 0 || $variantId <= 0 || !TenantContext::get()->has()) {
+            throw new \InvalidArgumentException('Invalid item or variant.');
+        }
+        $tid = $this->tenantId();
+        $item = $this->db->query(
+            "SELECT i.*, o.`channel_id`
+               FROM `#__store_order_items` i
+               JOIN `#__store_orders` o ON o.`id` = i.`order_id` AND o.`tenant_id` = i.`tenant_id`
+              WHERE i.`id` = ? AND i.`tenant_id` = ?
+              LIMIT 1",
+            [$itemId, $tid]
+        )->row;
+        if ($item === []) {
+            throw new \RuntimeException('Order item not found.');
+        }
+        $variant = $this->db->query(
+            "SELECT `id`, `sku` FROM `#__store_product_variants`
+              WHERE `id` = ? AND `tenant_id` = ? LIMIT 1",
+            [$variantId, $tid]
+        )->row;
+        if ($variant === []) {
+            throw new \RuntimeException('Variant not found.');
+        }
+
+        $this->db->query(
+            "UPDATE `#__store_order_items` SET `variant_id` = ? WHERE `id` = ? AND `tenant_id` = ?",
+            [$variantId, $itemId, $tid]
+        );
+
+        if ($linkListing) {
+            $channelId = (int) ($item['channel_id'] ?? 0);
+            $sku = trim((string) ($item['external_sku'] ?? $variant['sku'] ?? ''));
+            if ($channelId > 0 && $sku !== '') {
+                $existing = $this->db->query(
+                    "SELECT `id` FROM `#__store_listings`
+                      WHERE `tenant_id` = ? AND `channel_id` = ? AND `variant_id` = ?
+                      LIMIT 1",
+                    [$tid, $channelId, $variantId]
+                )->row;
+                if ($existing === []) {
+                    $this->db->insert('store_listings', [
+                        'tenant_id'    => $tid,
+                        'channel_id'   => $channelId,
+                        'variant_id'   => $variantId,
+                        'external_sku' => mb_substr($sku, 0, 128),
+                        'status'       => 'pending',
+                        'created_at'   => date('Y-m-d H:i:s'),
+                        'updated_at'   => date('Y-m-d H:i:s'),
+                    ]);
+                }
+            }
+        }
     }
 }

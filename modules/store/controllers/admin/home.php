@@ -26,8 +26,10 @@ class StoreAdminHome extends Controller
         $recent    = $this->dashboard->recentProducts(6);
         $movements = $this->dashboard->recentMovements(8);
         $lowStock  = $this->dashboard->lowStockTop(6);
+        $margins   = $this->dashboard->marginByChannel(30);
+        $otif      = $this->dashboard->supplierOtifSummary(180);
 
-        echo $this->view->inline(function () use ($stats, $orders, $waves, $recent, $movements, $lowStock) {
+        echo $this->view->inline(function () use ($stats, $orders, $waves, $recent, $movements, $lowStock, $margins, $otif) {
             $this->view->assign('title', 'Store');
             $this->view->block('right_sidebar', 'Dashboard');
             $e = fn(string|int|float $s): string => $this->view->e((string) $s);
@@ -78,12 +80,40 @@ class StoreAdminHome extends Controller
                     'tone'  => $stats['messages_unread'] > 0 ? 'danger' : 'secondary',
                 ],
                 [
+                    'label' => 'Overdue messages',
+                    'value' => number_format((int) ($stats['messages_overdue'] ?? 0)),
+                    'sub'   => ((int) ($stats['cases_overdue'] ?? 0)) . ' overdue case(s)',
+                    'icon'  => 'alarm',
+                    'url'   => $this->url->to('store/admin/overdue'),
+                    'tone'  => (((int) ($stats['messages_overdue'] ?? 0)) + ((int) ($stats['cases_overdue'] ?? 0))) > 0
+                        ? 'danger' : 'secondary',
+                ],
+                [
+                    'label' => 'Ship-by overdue',
+                    'value' => number_format((int) ($stats['ship_by_overdue'] ?? 0)),
+                    'sub'   => 'late despatch risk',
+                    'icon'  => 'calendar-x',
+                    'url'   => $this->url->to('store/admin/orders/ship-by', ['bucket' => 'overdue']),
+                    'tone'  => ((int) ($stats['ship_by_overdue'] ?? 0)) > 0 ? 'danger' : 'secondary',
+                ],
+                [
                     'label' => 'Stock attention',
                     'value' => number_format($stats['low_stock_count'] + $stats['out_of_stock_count']),
                     'sub'   => $stats['low_stock_count'] . ' low · ' . $stats['out_of_stock_count'] . ' out',
                     'icon'  => 'exclamation-triangle',
                     'url'   => $this->url->to('store/admin/inventory/low'),
                     'tone'  => $stats['out_of_stock_count'] > 0 ? 'danger' : 'warning',
+                ],
+                [
+                    'label' => 'Supplier OTIF',
+                    'value' => number_format((float) ($otif['otif_pct'] ?? 0), 1) . '%',
+                    'sub'   => (int) ($otif['suppliers'] ?? 0) . ' suppliers · '
+                        . (int) ($otif['late'] ?? 0) . ' late',
+                    'icon'  => 'truck',
+                    'url'   => $this->url->to('store/admin/analytics/supplier-otif'),
+                    'tone'  => ((float) ($otif['otif_pct'] ?? 0) >= 90
+                        ? 'success'
+                        : (((int) ($otif['late'] ?? 0)) > 0 ? 'warning' : 'secondary')),
                 ],
             ];
 
@@ -278,6 +308,36 @@ class StoreAdminHome extends Controller
                     echo '<td class="is-muted">'
                        . ($m['user_id'] !== null ? '#' . $m['user_id'] : '—')
                        . '</td>';
+                    echo '</tr>';
+                }
+                echo '</tbody></table></div>';
+            }
+            echo '</section>';
+
+            echo '<section class="sf-dash-card" style="margin-top:.75rem">';
+            echo '<div class="sf-dash-card-h"><h2>Contribution margin by channel (30d)</h2>'
+               . '<a href="' . $e($this->url->to('store/admin/analytics/sku-margin')) . '">SKU / dead stock</a></div>';
+            if ($margins === []) {
+                echo '<p class="sf-dash-empty">No fulfilled order revenue in the last 30 days.</p>';
+            } else {
+                echo '<div class="table-responsive"><table class="sf-dash-table">';
+                echo '<thead><tr>'
+                   . '<th>Channel</th><th class="is-num">Orders</th>'
+                   . '<th class="is-num">Revenue</th><th class="is-num">Cost</th>'
+                   . '<th class="is-num">Fees</th><th class="is-num">Shipping</th>'
+                   . '<th class="is-num">Margin</th>'
+                   . '</tr></thead><tbody>';
+                foreach ($margins as $m) {
+                    $marginClass = $m['margin'] >= 0 ? 'is-plus' : 'is-minus';
+                    echo '<tr>';
+                    echo '<td>' . $e($m['channel_label'] !== '' ? $m['channel_label'] : '#' . $m['channel_id']) . '</td>';
+                    echo '<td class="is-num">' . (int) $m['orders'] . '</td>';
+                    echo '<td class="is-num">' . $e(number_format($m['revenue'], 2)) . '</td>';
+                    echo '<td class="is-num">' . $e(number_format($m['cost'], 2)) . '</td>';
+                    echo '<td class="is-num">' . $e(number_format((float) ($m['fees'] ?? 0), 2)) . '</td>';
+                    echo '<td class="is-num">' . $e(number_format((float) ($m['shipping'] ?? 0), 2)) . '</td>';
+                    echo '<td class="is-num ' . $marginClass . '">'
+                       . $e(number_format($m['margin'], 2)) . '</td>';
                     echo '</tr>';
                 }
                 echo '</tbody></table></div>';

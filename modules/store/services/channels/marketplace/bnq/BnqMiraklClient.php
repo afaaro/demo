@@ -207,6 +207,40 @@ final class BnqMiraklClient
     }
 
     /**
+     * Incidents API (when enabled on the Mirakl operator).
+     * Falls back to empty list if the endpoint is unavailable.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listIncidents(int $max = 50, int $offset = 0): array
+    {
+        $query = [
+            'max'    => (string) max(1, min(100, $max)),
+            'offset' => (string) max(0, $offset),
+        ];
+        if ($this->shopId !== null) {
+            $query['shop_id'] = $this->shopId;
+        }
+        $path = '/api/incidents?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        try {
+            $decoded = $this->request('GET', $path);
+        } catch (\Throwable) {
+            return [];
+        }
+        $rows = $decoded['incidents'] ?? $decoded['data'] ?? $decoded;
+        if (!is_array($rows)) {
+            return [];
+        }
+        $list = [];
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $list[] = $row;
+            }
+        }
+        return $list;
+    }
+
+    /**
      * M11 — List inbox threads (seek pagination).
      *
      * @return array{threads: list<array<string, mixed>>, next: ?string}

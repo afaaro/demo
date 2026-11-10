@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Module\Store\Services;
 
 use Module\Store\Services\Channels\Marketplace\Amazon\AmazonChannelClient;
+use Module\Store\Services\Channels\Marketplace\Bnq\BnqChannelClient;
 use Module\Store\Services\Channels\Marketplace\Ebay\EbayChannelClient;
 use RuntimeException;
 use System\Library\Database;
@@ -44,8 +45,12 @@ final class SupportCaseSyncService
             return $this->syncAmazon($channel, $lookbackDays);
         }
 
+        if ($channel->type === 'bnq') {
+            return $this->syncBnq($channel);
+        }
+
         if ($channel->type !== 'ebay') {
-            throw new RuntimeException('Support cases are only available for eBay and Amazon channels.');
+            throw new RuntimeException('Support cases are only available for eBay, Amazon, and B&Q channels.');
         }
 
         $client = $this->factory->make($channel);
@@ -148,7 +153,59 @@ final class SupportCaseSyncService
     }
 
     /**
-     * Sync every enabled + connected eBay / Amazon channel.
+     * B&Q Mirakl incidents + dispute-like inbox threads → kind bnq_incident.
+     *
+     * @return array{created: int, updated: int, cases: int, inquiries: int, details: int, errors: int, incidents: int}
+     */
+    private function syncBnq(Channel $channel): array
+    {
+        $client = $this->factory->make($channel);
+        if (!$client instanceof BnqChannelClient) {
+            throw new RuntimeException('B&Q client unavailable.');
+        }
+
+        $stats = [
+            'created'    => 0,
+            'updated'    => 0,
+            'cases'      => 0,
+            'inquiries'  => 0,
+            'details'    => 0,
+            'errors'     => 0,
+            'incidents'  => 0,
+        ];
+
+        try {
+            $rows = $client->fetchIncidentsAndDisputes(80);
+        } catch (\Throwable $e) {
+            $stats['errors']++;
+            error_log('B&Q incident sync: ' . $e->getMessage());
+            return $stats;
+        }
+
+        foreach ($rows as $mapped) {
+            if (!is_array($mapped)) {
+                continue;
+            }
+            $ext = trim((string) ($mapped['external_id'] ?? ''));
+            if ($ext === '') {
+                continue;
+            }
+            try {
+                $action = $this->cases->upsert((int) $channel->id, 'bnq_incident', $ext, $mapped);
+                $stats[$action]++;
+                $stats['cases']++;
+                $stats['incidents']++;
+            } catch (\Throwable $e) {
+                $stats['errors']++;
+                error_log("B&Q incident upsert [{$ext}]: " . $e->getMessage());
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Sync every enabled + connected eBay / Amazon / B&Q channel.
      *
      * @return array{channels: int, created: int, updated: int, cases: int, inquiries: int, details: int, errors: int}
      */
@@ -173,7 +230,7 @@ final class SupportCaseSyncService
         ];
 
         foreach ($channels as $channel) {
-            if (!in_array($channel->type, ['ebay', 'amazon'], true) || !$channel->isConnected()) {
+            if (!in_array($channel->type, ['ebay', 'amazon', 'bnq'], true) || !$channel->isConnected()) {
                 continue;
             }
             $totals['channels']++;

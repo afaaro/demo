@@ -220,8 +220,8 @@ class LivestreamStudio extends Controller
             }
         }
 
-        // Last resort: parse MediaMTX HLS master (public :8888 / proxy) for codec + resolution.
-        if ($payload === null) {
+        // Last resort: HLS probe — only while DB says live (avoid offline CDN spam).
+        if ($payload === null && (($stream['status'] ?? '') === 'live')) {
             $payload = livestream_hls_telemetry($slug);
             if ($payload !== null) {
                 $via = 'hls';
@@ -229,10 +229,27 @@ class LivestreamStudio extends Controller
         }
 
         if ($payload === null) {
-            http_response_code(503);
+            // Publisher stopped / API unreachable — return offline stub, do not hit :8888.
             echo json_encode([
-                'ok'    => false,
-                'error' => 'Live feed stats unavailable (MediaMTX API unreachable)',
+                'ok'          => true,
+                'stream_id'   => (int) $stream['id'],
+                'title'       => (string) $stream['title'],
+                'slug'        => $slug,
+                'db_status'   => (string) ($stream['status'] ?? 'idle'),
+                'via'         => 'offline',
+                'transcode_on'=> false,
+                'source'      => [
+                    'name'   => $slug,
+                    'role'   => 'ingest',
+                    'online' => false,
+                    'tracks' => [],
+                ],
+                'web'         => [
+                    'name'   => livestream_playback_slug($slug),
+                    'role'   => 'h264',
+                    'online' => false,
+                    'tracks' => [],
+                ],
             ]);
             return;
         }
