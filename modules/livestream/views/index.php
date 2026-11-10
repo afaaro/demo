@@ -1,8 +1,14 @@
 <?php
 /** @var list<array<string,mixed>> $previews */
 /** @var string $statusUrl */
+/** @var int $pollMs */
+/** @var int $liveSync */
+/** @var int $maxLatency */
 $previews = $previews ?? [];
 $statusUrl = (string) ($statusUrl ?? '');
+$pollMs = (int) ($pollMs ?? 3000);
+$liveSync = (int) ($liveSync ?? 2);
+$maxLatency = (int) ($maxLatency ?? 4);
 $e = static fn(string|int|float $v): string => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $liveCount = 0;
 foreach ($previews as $p) {
@@ -11,7 +17,11 @@ foreach ($previews as $p) {
     }
 }
 ?>
-<div class="ls-mv-page" data-ls-status-url="<?= $e($statusUrl) ?>">
+<div class="ls-mv-page"
+     data-ls-status-url="<?= $e($statusUrl) ?>"
+     data-ls-poll-ms="<?= $pollMs ?>"
+     data-ls-live-sync="<?= $liveSync ?>"
+     data-ls-max-latency="<?= $maxLatency ?>">
   <header class="ls-mv-toolbar">
     <div class="ls-mv-brand">
       <strong>Multiviewer</strong>

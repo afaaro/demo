@@ -31,13 +31,19 @@ class LivestreamHome extends Controller
         }
 
         $statusUrl = url('livestream/status');
+        $pollMs = livestream_player_poll_ms();
+        $liveSync = max(1, (int) (livestream_config()['player_live_sync'] ?? 2));
+        $maxLatency = max($liveSync + 1, (int) (livestream_config()['player_max_latency'] ?? 4));
 
-        echo $this->view->inline(function () use ($previews, $statusUrl): void {
+        echo $this->view->inline(function () use ($previews, $statusUrl, $pollMs, $liveSync, $maxLatency): void {
             include get_module_path('livestream') . '/views/index.php';
         }, 'main', [
-            'title'     => $title,
-            'previews'  => $previews,
-            'statusUrl' => $statusUrl,
+            'title'      => $title,
+            'previews'   => $previews,
+            'statusUrl'  => $statusUrl,
+            'pollMs'     => $pollMs,
+            'liveSync'   => $liveSync,
+            'maxLatency' => $maxLatency,
         ]);
     }
 
@@ -98,11 +104,14 @@ class LivestreamHome extends Controller
             $live = $dbLive;
             if ($mtx !== null) {
                 $rawOnline = $mtx->isPathOnline($slug);
-                $h264Online = livestream_slug_needs_transcode($slug)
+                $needsTc = livestream_slug_needs_transcode($slug);
+                $h264Online = $needsTc
                     ? $mtx->isPathOnline(livestream_h264_slug($slug))
                     : false;
-                $live = $rawOnline || $h264Online;
-                if ($dbLive && !$live) {
+                // Transcode slugs: only "live" when {_h264} is ready (raw alone = black tile).
+                // Clean sources (afaaro): live when raw publishes.
+                $live = $needsTc ? $h264Online : $rawOnline;
+                if ($dbLive && !$rawOnline && !$h264Online) {
                     try {
                         $repo->markIdle((int) ($row['id'] ?? 0));
                     } catch (\Throwable) {

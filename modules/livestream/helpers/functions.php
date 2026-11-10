@@ -25,9 +25,13 @@ function livestream_config(): array
         // soomaali.net studio: pull Live feed stats from home WAMP when local API is unreachable.
         'stats_upstream'     => '',
         // Re-encode publisher video to H.264 for the website player.
-        'hls_transcode_h264' => false,
-        'transcode_key'      => 'soomaali-hls-transcode',
-        'webhook_secret'   => '',
+        'hls_transcode_h264'  => false,
+        'hls_transcode_slugs' => [],
+        'transcode_key'       => 'soomaali-hls-transcode',
+        'webhook_secret'      => '',
+        'player_poll_ms'      => 2500,
+        'player_live_sync'    => 1,
+        'player_max_latency'  => 2,
     ];
 
     // File defaults (modules/livestream/config/stream.php).
@@ -66,6 +70,17 @@ function livestream_config(): array
     if (isset($defaults['rtmp_port'])) {
         $defaults['rtmp_port'] = (int) $defaults['rtmp_port'];
     }
+    foreach (['player_poll_ms', 'player_live_sync', 'player_max_latency'] as $intKey) {
+        if (isset($defaults[$intKey])) {
+            $defaults[$intKey] = max(1, (int) $defaults[$intKey]);
+        }
+    }
+    if (isset($defaults['hls_transcode_slugs']) && is_string($defaults['hls_transcode_slugs'])) {
+        $defaults['hls_transcode_slugs'] = array_values(array_filter(array_map(
+            static fn(string $s): string => strtolower(trim($s, " \t\n\r\0\x0B/")),
+            explode(',', $defaults['hls_transcode_slugs'])
+        )));
+    }
     if (array_key_exists('enabled', $defaults)) {
         $raw = $defaults['enabled'];
         $defaults['enabled'] = is_bool($raw)
@@ -75,6 +90,12 @@ function livestream_config(): array
 
     $cfg = $defaults;
     return $cfg;
+}
+
+/** Player status-poll interval (ms). */
+function livestream_player_poll_ms(): int
+{
+    return max(1500, (int) (livestream_config()['player_poll_ms'] ?? 3000));
 }
 
 function livestream_enabled(): bool

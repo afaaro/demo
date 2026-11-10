@@ -194,6 +194,41 @@ class LivestreamWebhook extends Controller
         return $secret !== '' && hash_equals($secret, $password);
     }
 
+    /**
+     * on-online.bat: GET …/transcode&secret=…&path=slug
+     * Body is "1" (run ffmpeg → {_h264}) or "0" (raw path only).
+     */
+    public function transcodeAction(): void
+    {
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store');
+
+        if (!livestream_enabled()) {
+            echo '0';
+            return;
+        }
+
+        $cfg = livestream_config();
+        $secret = (string) ($cfg['webhook_secret'] ?? '');
+        $provided = (string) ($this->request->get('secret', 'string', '') ?: ($_GET['secret'] ?? ''));
+        if ($secret === '' || !hash_equals($secret, $provided)) {
+            http_response_code(403);
+            echo '0';
+            return;
+        }
+
+        $path = trim((string) ($this->request->get('path', 'string', '') ?: ($_GET['path'] ?? '')), '/');
+        if ($path === '' && isset($_SERVER['MTX_PATH'])) {
+            $path = trim((string) $_SERVER['MTX_PATH'], '/');
+        }
+        if (str_ends_with($path, '_h264')) {
+            echo '0';
+            return;
+        }
+
+        echo livestream_slug_needs_transcode($path) ? '1' : '0';
+    }
+
     public function statusAction(): void
     {
         header('Content-Type: application/json; charset=utf-8');

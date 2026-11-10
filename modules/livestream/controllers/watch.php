@@ -33,11 +33,13 @@ class LivestreamWatch extends Controller
         $mtx = $this->mediaMtxClient();
         if ($mtx !== null) {
             $rawOnline = $mtx->isPathOnline($slugKey);
-            $h264Online = livestream_slug_needs_transcode($slugKey)
+            $needsTc = livestream_slug_needs_transcode($slugKey);
+            $h264Online = $needsTc
                 ? $mtx->isPathOnline(livestream_h264_slug($slugKey))
                 : false;
-            $isLive = $rawOnline || $h264Online;
-            if ($dbLive && !$isLive) {
+            // Match multiview: transcode slugs wait for {_h264}; others use raw.
+            $isLive = $needsTc ? $h264Online : $rawOnline;
+            if ($dbLive && !$rawOnline && !$h264Online) {
                 try {
                     $repo->markIdle((int) ($stream['id'] ?? 0));
                 } catch (\Throwable) {
@@ -51,6 +53,9 @@ class LivestreamWatch extends Controller
 
         $title = (string) $stream['title'];
         $statusUrl = url('livestream/status', ['slug' => $slugKey]);
+        $pollMs = livestream_player_poll_ms();
+        $liveSync = max(1, (int) (livestream_config()['player_live_sync'] ?? 2));
+        $maxLatency = max($liveSync + 1, (int) (livestream_config()['player_max_latency'] ?? 4));
 
         $this->view->assign('title', $title);
         $this->view->setTitle($title);
@@ -62,7 +67,7 @@ class LivestreamWatch extends Controller
         $src = $this->view->e($this->view->moduleAsset('livestream', 'livestream.js'));
         $this->view->block('scripts', '<script src="' . $src . '" defer></script>');
 
-        echo $this->view->inline(function () use ($stream, $isLive, $hlsUrl, $hlsFallback, $statusUrl): void {
+        echo $this->view->inline(function () use ($stream, $isLive, $hlsUrl, $hlsFallback, $statusUrl, $pollMs, $liveSync, $maxLatency): void {
             include get_module_path('livestream') . '/views/watch.php';
         }, 'main', [
             'title'       => $title,
@@ -71,6 +76,9 @@ class LivestreamWatch extends Controller
             'hlsUrl'      => $hlsUrl,
             'hlsFallback' => $hlsFallback,
             'statusUrl'   => $statusUrl,
+            'pollMs'      => $pollMs,
+            'liveSync'    => $liveSync,
+            'maxLatency'  => $maxLatency,
         ]);
     }
 

@@ -1,9 +1,27 @@
 (function () {
-  var POLL_MS = 4000;
+  function readIntAttr(el, name, fallback) {
+    if (!el) return fallback;
+    var n = parseInt(el.getAttribute(name) || '', 10);
+    return isFinite(n) && n > 0 ? n : fallback;
+  }
 
-  function startPlayback(video, src, onReady, fallbackSrc) {
+  function playerTuning(root) {
+    var liveSync = readIntAttr(root, 'data-ls-live-sync', 2);
+    var maxLatency = readIntAttr(root, 'data-ls-max-latency', 4);
+    if (maxLatency <= liveSync) maxLatency = liveSync + 1;
+    return {
+      pollMs: readIntAttr(root, 'data-ls-poll-ms', 3000),
+      liveSync: liveSync,
+      maxLatency: maxLatency,
+    };
+  }
+
+  function startPlayback(video, src, onReady, fallbackSrc, tuning) {
     fallbackSrc = fallbackSrc || '';
     var usedFallback = false;
+    tuning = tuning || {};
+    var liveSync = tuning.liveSync || 2;
+    var maxLatency = tuning.maxLatency || 4;
 
     function tryNative(url) {
       video.src = url;
@@ -21,15 +39,30 @@
     if (window.Hls && window.Hls.isSupported()) {
       var hls = new window.Hls({
         enableWorker: true,
-        lowLatencyMode: false,
-        maxBufferLength: 8,
-        maxMaxBufferLength: 20,
+        lowLatencyMode: true,
+        backBufferLength: 12,
+        maxBufferLength: Math.max(2, liveSync + 1),
+        maxMaxBufferLength: Math.max(4, maxLatency + 1),
+        liveSyncDurationCount: liveSync,
+        liveMaxLatencyDurationCount: maxLatency,
+        maxLiveSyncPlaybackRate: 1.5,
+        liveDurationInfinity: true,
       });
       hls.loadSource(src);
       hls.attachMedia(video);
       hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
         video.play().catch(function () {});
         if (typeof onReady === 'function') onReady();
+      });
+      // Nudge toward live edge if we drift behind.
+      hls.on(window.Hls.Events.FRAG_LOADED, function () {
+        try {
+          if (!video || video.paused || !hls.liveSyncPosition) return;
+          var lag = hls.liveSyncPosition - video.currentTime;
+          if (lag > Math.max(2.5, maxLatency)) {
+            video.currentTime = hls.liveSyncPosition - 0.5;
+          }
+        } catch (e) {}
       });
       hls.on(window.Hls.Events.ERROR, function (_event, data) {
         if (!data || !data.fatal) return;
@@ -47,6 +80,11 @@
           if (retries > 4) {
             try { hls.destroy(); } catch (e) {}
             video._lsHls = null;
+            // Allow multiview status poll to start again when path becomes ready.
+            var tile = video.closest && video.closest('[data-ls-mv-tile]');
+            if (tile) tile.setAttribute('data-ls-started', '0');
+            var watch = video.closest && video.closest('[data-ls-watch]');
+            if (watch) watch.setAttribute('data-ls-started', '0');
             return;
           }
           hls.startLoad();
@@ -55,11 +93,15 @@
         if (!usedFallback && fallbackSrc && fallbackSrc !== src) {
           usedFallback = true;
           try { hls.destroy(); } catch (e) {}
-          startPlayback(video, fallbackSrc, onReady, '');
+          startPlayback(video, fallbackSrc, onReady, '', tuning);
           return;
         }
         try { hls.destroy(); } catch (e) {}
         video._lsHls = null;
+        var deadTile = video.closest && video.closest('[data-ls-mv-tile]');
+        if (deadTile) deadTile.setAttribute('data-ls-started', '0');
+        var deadWatch = video.closest && video.closest('[data-ls-watch]');
+        if (deadWatch) deadWatch.setAttribute('data-ls-started', '0');
       });
       video._lsHls = hls;
       return;
@@ -281,7 +323,7 @@
     });
   }
 
-  function startTilePlayback(tile) {
+  function startTilePlayback(tile, tuning) {
     var src = tile.getAttribute('data-hls') || '';
     var video = tile.querySelector('video.ls-mv-video');
     if (!src || !video) return;
@@ -309,7 +351,7 @@
     var fallback = tile.getAttribute('data-hls-fallback') || '';
     startPlayback(video, src, function () {
       attachVuMeters(tile, video);
-    }, fallback);
+    }, fallback, tuning);
   }
 
   function stopTilePlayback(tile) {
@@ -343,6 +385,7 @@
   function applyMultiviewStatus(payload) {
     var grid = document.getElementById('ls-mv-grid');
     if (!grid || !payload || !payload.ok) return;
+    var tuning = playerTuning(document.querySelector('.ls-mv-page'));
 
     var bySlug = {};
     (payload.streams || []).forEach(function (s) {
@@ -362,16 +405,25 @@
       if (wantLive) {
         tile.setAttribute('data-hls', hls);
         tile.setAttribute('data-hls-fallback', fallback);
+        var videoEl = tile.querySelector('video.ls-mv-video');
         var playing = tile.getAttribute('data-ls-started') === '1';
         var sameSrc = (tile.getAttribute('data-hls-playing') || '') === hls;
-        if (!isLive || !playing) {
-          // Coming online (or first boot while already live).
-          startTilePlayback(tile);
+        var dead = playing && videoEl && !videoEl._lsHls;
+        if (!hls) {
+          // Live flag without playable URL yet (transcoder warming) — wait for next poll.
+          return;
+        }
+        if (!isLive || !playing || dead) {
+          // Coming online, recovered from failed start, or first boot while already live.
+          if (dead) {
+            tile.setAttribute('data-ls-started', '0');
+          }
+          startTilePlayback(tile, tuning);
         } else if (hls && !sameSrc) {
           // URL changed (e.g. h264 became ready) — restart quietly.
-          stopPlayback(tile.querySelector('video.ls-mv-video'));
+          stopPlayback(videoEl);
           tile.setAttribute('data-ls-started', '0');
-          startTilePlayback(tile);
+          startTilePlayback(tile, tuning);
         }
       } else {
         // Offline: always tear down HLS, even if flags were already cleared.
@@ -385,9 +437,10 @@
     updateLiveCount(payload.live_count || 0);
   }
 
-  function pollJson(url, onData) {
+  function pollJson(url, onData, pollMs) {
     if (!url) return;
     var busy = false;
+    var interval = Math.max(1500, pollMs || 3000);
     var tick = function () {
       if (busy) return;
       busy = true;
@@ -398,7 +451,7 @@
         .finally(function () { busy = false; });
     };
     tick();
-    return setInterval(tick, POLL_MS);
+    return setInterval(tick, interval);
   }
 
   function bootMultiview() {
@@ -407,6 +460,7 @@
 
     var page = document.querySelector('.ls-mv-page');
     var statusUrl = page ? (page.getAttribute('data-ls-status-url') || '') : '';
+    var tuning = playerTuning(page);
 
     var enableBtn = document.getElementById('ls-mv-enable-audio');
     if (isPhoneBrowser()) {
@@ -439,7 +493,7 @@
     function startLiveTiles() {
       grid.querySelectorAll('[data-ls-mv-tile][data-live="1"]').forEach(function (tile) {
         var start = function () {
-          startTilePlayback(tile);
+          startTilePlayback(tile, tuning);
         };
         if ('IntersectionObserver' in window) {
           var io = new IntersectionObserver(function (entries) {
@@ -460,7 +514,9 @@
     function run() {
       startLiveTiles();
       if (statusUrl) {
-        pollJson(statusUrl, applyMultiviewStatus);
+        pollJson(statusUrl, function (j) {
+          applyMultiviewStatus(j);
+        }, tuning.pollMs);
       }
     }
 
@@ -487,6 +543,7 @@
     var badge = document.getElementById('ls-watch-badge');
     var badgeOff = document.getElementById('ls-watch-badge-off');
     if (!video) return;
+    var tuning = playerTuning(root);
 
     var wantLive = !!(info && info.live);
     var isLive = root.getAttribute('data-live') === '1';
@@ -512,7 +569,7 @@
         root.setAttribute('data-ls-started', '1');
         root.setAttribute('data-hls-playing', hls);
         if (hls) {
-          startPlayback(video, hls, null, fallback);
+          startPlayback(video, hls, null, fallback, tuning);
         }
       }
     } else if (isLive || root.getAttribute('data-ls-started') === '1') {
@@ -543,6 +600,7 @@
     var initiallyLive = root.getAttribute('data-live') === '1';
     var hls = root.getAttribute('data-hls') || '';
     var fallback = root.getAttribute('data-hls-fallback') || '';
+    var tuning = playerTuning(root);
 
     function startIfLive() {
       if (!initiallyLive || !hls) return;
@@ -550,7 +608,7 @@
       video.muted = true;
       root.setAttribute('data-ls-started', '1');
       root.setAttribute('data-hls-playing', hls);
-      startPlayback(video, hls, null, fallback);
+      startPlayback(video, hls, null, fallback, tuning);
     }
 
     function run() {
@@ -558,7 +616,7 @@
       if (statusUrl) {
         pollJson(statusUrl, function (j) {
           applyWatchStatus(root, j);
-        });
+        }, tuning.pollMs);
       }
     }
 

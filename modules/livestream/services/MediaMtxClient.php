@@ -19,8 +19,8 @@ final class MediaMtxClient
         if ($this->baseUrl === '') {
             return false;
         }
-        $data = $this->getJson('/v3/paths/list');
-        return is_array($data);
+        // onlinePathSet() caches /v3/paths/list for the rest of the request.
+        return $this->onlinePathSet() !== null;
     }
 
     /**
@@ -39,8 +39,47 @@ final class MediaMtxClient
     /** True when MediaMTX reports the path online with tracks. */
     public function isPathOnline(string $name): bool
     {
+        $online = $this->onlinePathSet();
+        $name = trim($name, '/');
+        if ($online !== null) {
+            return isset($online[$name]);
+        }
         $path = $this->getPath($name);
         return is_array($path) && !empty($path['online']);
+    }
+
+    /**
+     * One /v3/paths/list call → set of online path names (request-scoped cache).
+     *
+     * @return array<string, true>|null null when list API unavailable
+     */
+    public function onlinePathSet(): ?array
+    {
+        static $cache = [];
+        $key = $this->baseUrl;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+
+        $data = $this->getJson('/v3/paths/list');
+        if (!is_array($data) || !isset($data['items']) || !is_array($data['items'])) {
+            return $cache[$key] = null;
+        }
+
+        $out = [];
+        foreach ($data['items'] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $name = trim((string) ($row['name'] ?? ''), '/');
+            if ($name !== '' && !empty($row['ready'])) {
+                // MediaMTX v1 uses ready; older payloads used online.
+                $out[$name] = true;
+            } elseif ($name !== '' && !empty($row['online'])) {
+                $out[$name] = true;
+            }
+        }
+        return $cache[$key] = $out;
     }
 
     /**

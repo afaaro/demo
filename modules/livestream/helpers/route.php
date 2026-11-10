@@ -70,6 +70,14 @@ return [
         'methods'    => ['POST', 'GET'],
         'csrf'       => false,
     ],
+    // on-online.bat asks this before starting ffmpeg (config-driven slug list).
+    'livestream/webhook/transcode' => [
+        'controller' => 'livestream/webhook',
+        'action'     => 'transcode',
+        'auth'       => false,
+        'methods'    => ['GET'],
+        'csrf'       => false,
+    ],
     'livestream/telemetry' => [
         'controller' => 'livestream/webhook',
         'action'     => 'telemetry',

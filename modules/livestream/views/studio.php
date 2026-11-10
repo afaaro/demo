@@ -113,121 +113,179 @@ $selectedId = (int) ($stream['id'] ?? 0);
     <?php endif; ?>
 
     <section class="ls-section">
-      <h2>Wirecast (SRT)</h2>
-      <ol class="ls-steps">
-        <li>Output → Output Settings → Destination → <strong>SRT</strong>.</li>
-        <li>Do <strong>not</strong> paste the full <code>srt://…</code> URL into Address (Wirecast often breaks it).</li>
-        <li>Fill the split fields below. Leave <strong>Passphrase empty</strong>.</li>
-        <li>Encoder: H.264 or HEVC (H.265). Audio AAC. Remote SRT: keep video ≤ ~8 Mbps (higher → <code>max recorded size exceeded</code>).</li>
-        <li>Same PC as MediaMTX → use <strong>local host</strong>. Remote → use <strong>public host</strong>, or switch to RTMP below if SRT drops.</li>
-      </ol>
+      <h2>Publish setup</h2>
+      <p class="ls-muted">Open a protocol below. Use RTMP for remote / high bitrate; SRT for local or low-latency.</p>
 
-      <label class="ls-copy-field">
-        Wirecast Address (local)
-        <div class="ls-copy-row">
-          <input type="text" id="ls-wc-host-local" readonly value="<?= $e($srtHostLocal ?? '127.0.0.1') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-wc-host-local">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        Wirecast Address (public / DynDNS)
-        <div class="ls-copy-row">
-          <input type="text" id="ls-wc-host-public" readonly value="<?= $e($srtHostPublic ?? 'afaaro.myvnc.com') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-wc-host-public">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        Wirecast Port
-        <div class="ls-copy-row">
-          <input type="text" id="ls-wc-port" readonly value="<?= (int) ($srtPort ?? 8890) ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-wc-port">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        Wirecast Stream ID
-        <div class="ls-copy-row">
-          <input type="text" id="ls-wc-streamid" readonly value="<?= $e($srtStreamId ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-wc-streamid">Copy</button>
-        </div>
-      </label>
+      <div class="ls-accordions">
+        <details class="ls-acc" open>
+          <summary class="ls-acc-sum">
+            <span class="ls-acc-title">Wirecast <span class="ls-acc-tag">SRT</span></span>
+            <span class="ls-acc-hint">Split host / port / stream ID</span>
+          </summary>
+          <div class="ls-acc-body">
+            <ol class="ls-steps">
+              <li>Output → Output Settings → Destination → <strong>SRT</strong>.</li>
+              <li>Do <strong>not</strong> paste the full <code>srt://…</code> URL into Address (Wirecast often breaks it).</li>
+              <li>Fill the split fields below. Leave <strong>Passphrase empty</strong>.</li>
+              <li>Encoder: H.264 or HEVC (H.265). Audio AAC. Remote SRT: keep video ≤ ~8 Mbps.</li>
+              <li>Same PC as MediaMTX → use <strong>local host</strong>. Remote → use <strong>public host</strong>, or switch to RTMP if SRT drops.</li>
+            </ol>
+            <label class="ls-copy-field">
+              Wirecast Address (local)
+              <div class="ls-copy-row">
+                <input type="text" id="ls-wc-host-local" readonly value="<?= $e($srtHostLocal ?? '127.0.0.1') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-wc-host-local">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              Wirecast Address (public / DynDNS)
+              <div class="ls-copy-row">
+                <input type="text" id="ls-wc-host-public" readonly value="<?= $e($srtHostPublic ?? 'afaaro.myvnc.com') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-wc-host-public">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              Wirecast Port
+              <div class="ls-copy-row">
+                <input type="text" id="ls-wc-port" readonly value="<?= (int) ($srtPort ?? 8890) ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-wc-port">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              Wirecast Stream ID
+              <div class="ls-copy-row">
+                <input type="text" id="ls-wc-streamid" readonly value="<?= $e($srtStreamId ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-wc-streamid">Copy</button>
+              </div>
+            </label>
+          </div>
+        </details>
 
-      <h2>OBS (SRT)</h2>
-      <ol class="ls-steps">
-        <li>Settings → Stream → Service = <strong>Custom</strong>.</li>
-        <li>Server = paste the SRT URL below (must show <code>publish:slug:obs:…</code> with real colons, not <code>%3A</code>).</li>
-        <li>Leave Stream Key empty for SRT.</li>
-        <li>Same PC as MediaMTX → use <strong>this PC / LAN</strong> URL.</li>
-        <li>If OBS still rejects it: use Wirecast’s <strong>Stream ID</strong> value with an SRT output that has a separate Stream ID field.</li>
-      </ol>
-      <label class="ls-copy-field">
-        SRT URL — this PC / LAN
-        <div class="ls-copy-row">
-          <input type="text" id="ls-obs-url-local" readonly value="<?= $e($obsUrlLocal ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-obs-url-local">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        SRT URL — public
-        <div class="ls-copy-row">
-          <input type="text" id="ls-obs-url" readonly value="<?= $e($obsUrl) ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-obs-url">Copy</button>
-        </div>
-      </label>
+        <details class="ls-acc">
+          <summary class="ls-acc-sum">
+            <span class="ls-acc-title">OBS <span class="ls-acc-tag">SRT</span></span>
+            <span class="ls-acc-hint">Full srt:// URL</span>
+          </summary>
+          <div class="ls-acc-body">
+            <ol class="ls-steps">
+              <li>Settings → Stream → Service = <strong>Custom</strong>.</li>
+              <li>Server = paste the SRT URL below (real colons in <code>publish:slug:obs:…</code>, not <code>%3A</code>).</li>
+              <li>Leave Stream Key empty for SRT.</li>
+              <li>Same PC as MediaMTX → use <strong>this PC / LAN</strong> URL.</li>
+              <li>If OBS rejects it: use Wirecast’s Stream ID with an SRT output that has a separate Stream ID field.</li>
+            </ol>
+            <label class="ls-copy-field">
+              SRT URL — this PC / LAN
+              <div class="ls-copy-row">
+                <input type="text" id="ls-obs-url-local" readonly value="<?= $e($obsUrlLocal ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-obs-url-local">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              SRT URL — public
+              <div class="ls-copy-row">
+                <input type="text" id="ls-obs-url" readonly value="<?= $e($obsUrl) ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-obs-url">Copy</button>
+              </div>
+            </label>
+          </div>
+        </details>
 
-      <h2>OBS / Phone (RTMP) — preferred for remote / high bitrate</h2>
-      <ol class="ls-steps">
-        <li>Forward router TCP <strong><?= (int) ($rtmpPort ?? 1935) ?></strong> → this PC (same as SRT).</li>
-        <li>If SRT logs show <code>max recorded size exceeded</code>, switch that encoder to <strong>RTMP</strong> and keep bitrate ≤ ~8 Mbps (or use a smaller keyframe / IDR).</li>
-        <li><strong>OBS Custom RTMP:</strong> Server = RTMP server below, Stream Key = stream key (password).</li>
-        <li><strong>OBS with Use authentication:</strong> Server = RTMP server, Stream Key empty, Username = <code>obs</code>, Password = stream key.</li>
-        <li>Larix / Prism: paste the full RTMP URL (<code>?user=&amp;pass=</code>).</li>
-        <li>Encode <strong>H.264 + AAC</strong> for best compatibility.</li>
-      </ol>
-      <label class="ls-copy-field">
-        RTMP URL — public
-        <div class="ls-copy-row">
-          <input type="text" id="ls-rtmp-url" readonly value="<?= $e($rtmpUrl ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-url">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        RTMP URL — this PC / LAN
-        <div class="ls-copy-row">
-          <input type="text" id="ls-rtmp-url-local" readonly value="<?= $e($rtmpUrlLocal ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-url-local">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        RTMP server (no credentials)
-        <div class="ls-copy-row">
-          <input type="text" id="ls-rtmp-server" readonly value="<?= $e($rtmpServer ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-server">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        RTMP username
-        <div class="ls-copy-row">
-          <input type="text" id="ls-rtmp-user" readonly value="<?= $e($rtmpUser ?? 'obs') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-user">Copy</button>
-        </div>
-      </label>
-      <label class="ls-copy-field">
-        RTMP password (stream key)
-        <div class="ls-copy-row">
-          <input type="text" id="ls-rtmp-pass" readonly value="<?= $e($rtmpPass ?? '') ?>">
-          <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-pass">Copy</button>
-        </div>
-      </label>
+        <details class="ls-acc">
+          <summary class="ls-acc-sum">
+            <span class="ls-acc-title">OBS / Phone <span class="ls-acc-tag is-pref">RTMP</span></span>
+            <span class="ls-acc-hint">Preferred for remote / high bitrate</span>
+          </summary>
+          <div class="ls-acc-body">
+            <ol class="ls-steps">
+              <li>Forward router TCP <strong><?= (int) ($rtmpPort ?? 1935) ?></strong> → this PC.</li>
+              <li>If SRT logs show <code>max recorded size exceeded</code>, switch to <strong>RTMP</strong> and keep bitrate ≤ ~8 Mbps.</li>
+              <li><strong>OBS Custom RTMP:</strong> Server = RTMP server below, Stream Key = stream key (password).</li>
+              <li><strong>OBS with authentication:</strong> Server = RTMP server, Stream Key empty, Username = <code>obs</code>, Password = stream key.</li>
+              <li>Larix / Prism: paste the full RTMP URL (<code>?user=&amp;pass=</code>).</li>
+              <li>Encode <strong>H.264 + AAC</strong> for best compatibility.</li>
+            </ol>
+            <label class="ls-copy-field">
+              RTMP URL — public
+              <div class="ls-copy-row">
+                <input type="text" id="ls-rtmp-url" readonly value="<?= $e($rtmpUrl ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-url">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              RTMP URL — this PC / LAN
+              <div class="ls-copy-row">
+                <input type="text" id="ls-rtmp-url-local" readonly value="<?= $e($rtmpUrlLocal ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-url-local">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              RTMP server (no credentials)
+              <div class="ls-copy-row">
+                <input type="text" id="ls-rtmp-server" readonly value="<?= $e($rtmpServer ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-server">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              RTMP username
+              <div class="ls-copy-row">
+                <input type="text" id="ls-rtmp-user" readonly value="<?= $e($rtmpUser ?? 'obs') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-user">Copy</button>
+              </div>
+            </label>
+            <label class="ls-copy-field">
+              RTMP password (stream key)
+              <div class="ls-copy-row">
+                <input type="text" id="ls-rtmp-pass" readonly value="<?= $e($rtmpPass ?? '') ?>">
+                <button type="button" class="ls-btn" data-ls-copy="ls-rtmp-pass">Copy</button>
+              </div>
+            </label>
+          </div>
+        </details>
 
-      <p class="ls-muted">
-        HLS (website / H.264): <code><?= $e($hlsUrl) ?></code>
-        <?php if (!empty($hlsUrlRaw) && ($hlsUrlRaw !== $hlsUrl)): ?>
-          <br>HLS (VLC / original): <code><?= $e($hlsUrlRaw) ?></code>
-        <?php endif; ?>
-      </p>
-      <?php if (!empty($cfg['hls_transcode_h264'])): ?>
-        <p class="ls-muted">HEVC ingest is OK; ffmpeg builds the website H.264 path automatically.</p>
-      <?php endif; ?>
+        <details class="ls-acc">
+          <summary class="ls-acc-sum">
+            <span class="ls-acc-title">Playback <span class="ls-acc-tag">HLS</span></span>
+            <span class="ls-acc-hint">Website / VLC</span>
+          </summary>
+          <div class="ls-acc-body">
+            <p class="ls-muted" style="margin-top:0">
+              HLS (website / H.264): <code><?= $e($hlsUrl) ?></code>
+              <?php if (!empty($hlsUrlRaw) && ($hlsUrlRaw !== $hlsUrl)): ?>
+                <br>HLS (VLC / original): <code><?= $e($hlsUrlRaw) ?></code>
+              <?php endif; ?>
+            </p>
+            <?php if (!empty($cfg['hls_transcode_h264'])): ?>
+              <p class="ls-muted">HEVC ingest is OK; ffmpeg builds the website H.264 path automatically for listed slugs.</p>
+            <?php endif; ?>
+          </div>
+        </details>
+
+        <details class="ls-acc">
+          <summary class="ls-acc-sum">
+            <span class="ls-acc-title">MediaMTX <span class="ls-acc-tag">Webhooks</span></span>
+            <span class="ls-acc-hint">YAML hooks</span>
+          </summary>
+          <div class="ls-acc-body">
+            <p class="ls-muted" style="margin-top:0">Put these in your MediaMTX YAML (see example file).</p>
+            <ul class="ls-mono">
+              <li>Auth: <code><?= $e(url('livestream/webhook', [], true)) ?></code></li>
+              <li>Ready:
+                <code><?= $e(url('livestream/webhook/status', [
+                    'event'  => 'ready',
+                    'secret' => (string) ($cfg['webhook_secret'] ?? ''),
+                ], true)) ?>&amp;path=$MTX_PATH</code>
+              </li>
+              <li>Not ready:
+                <code><?= $e(url('livestream/webhook/status', [
+                    'event'  => 'notready',
+                    'secret' => (string) ($cfg['webhook_secret'] ?? ''),
+                ], true)) ?>&amp;path=$MTX_PATH</code>
+              </li>
+            </ul>
+          </div>
+        </details>
+      </div>
 
       <div class="ls-actions">
         <form method="post" action="<?= $e(url('livestream/studio/rotate')) ?>"
@@ -243,26 +301,6 @@ $selectedId = (int) ($stream['id'] ?? 0);
           <button type="submit" class="ls-btn is-ghost">Delete stream</button>
         </form>
       </div>
-    </section>
-
-    <section class="ls-section">
-      <h2>MediaMTX webhook URLs</h2>
-      <p class="ls-muted">Put these in your MediaMTX YAML (see example file).</p>
-      <ul class="ls-mono">
-        <li>Auth: <code><?= $e(url('livestream/webhook', [], true)) ?></code></li>
-        <li>Ready:
-          <code><?= $e(url('livestream/webhook/status', [
-              'event'  => 'ready',
-              'secret' => (string) ($cfg['webhook_secret'] ?? ''),
-          ], true)) ?>&amp;path=$MTX_PATH</code>
-        </li>
-        <li>Not ready:
-          <code><?= $e(url('livestream/webhook/status', [
-              'event'  => 'notready',
-              'secret' => (string) ($cfg['webhook_secret'] ?? ''),
-          ], true)) ?>&amp;path=$MTX_PATH</code>
-        </li>
-      </ul>
     </section>
   <?php endif; ?>
 </div>

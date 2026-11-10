@@ -17,9 +17,9 @@ hlsAddress: :8888
 # Off: avoids remux crash loops on broken CDN DTS (raw mogadishu).
 hlsAlwaysRemux: no
 hlsVariant: fmp4
-hlsSegmentCount: 7
+hlsSegmentCount: 3
 hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
+hlsPartDuration: 100ms
 hlsAllowOrigins: ["*"]
 hlsCDNSecret: "soomaali-hls-proxy-secret"
 
