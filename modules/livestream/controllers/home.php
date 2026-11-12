@@ -118,6 +118,17 @@ class LivestreamHome extends Controller
                         // Non-fatal — multiviewer still uses live=false.
                     }
                 }
+            } elseif ($dbLive) {
+                // soomaali.net: no local MediaMTX — heal stale "live" via home telemetry.
+                $online = $this->remotePathOnline($slug);
+                if ($online === false) {
+                    $live = false;
+                    try {
+                        $repo->markIdle((int) ($row['id'] ?? 0));
+                    } catch (\Throwable) {
+                        // Non-fatal.
+                    }
+                }
             }
 
             $name = trim((string) ($row['title'] ?? ''));
@@ -154,5 +165,54 @@ class LivestreamHome extends Controller
         }
         $client = new MediaMtxClient($api);
         return $client->isReachable() ? $client : null;
+    }
+
+    /**
+     * Ask home WAMP telemetry whether the publish path is actually online.
+     * @return bool|null null when upstream is unknown / unreachable
+     */
+    private function remotePathOnline(string $slug): ?bool
+    {
+        $cfg = livestream_config();
+        $upstream = trim((string) ($cfg['stats_upstream'] ?? ''));
+        $secret = trim((string) ($cfg['webhook_secret'] ?? ''));
+        if ($upstream === '' || $secret === '' || !function_exists('curl_init')) {
+            return null;
+        }
+
+        $sep = str_contains($upstream, '?') ? '&' : '?';
+        $url = $upstream . $sep . http_build_query([
+            'slug'   => $slug,
+            'secret' => $secret,
+        ]);
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT        => 4,
+            CURLOPT_HTTPHEADER     => [
+                'Accept: application/json',
+                'X-Livestream-Secret: ' . $secret,
+                'User-Agent: soomaali-livestream-status/1.0',
+            ],
+        ]);
+        $body = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false || $code < 200 || $code >= 300) {
+            return null;
+        }
+        $decoded = json_decode((string) $body, true);
+        if (!is_array($decoded) || empty($decoded['ok'])) {
+            return null;
+        }
+
+        if (livestream_slug_needs_transcode($slug)) {
+            return !empty($decoded['web']['online']);
+        }
+        return !empty($decoded['source']['online']);
     }
 }

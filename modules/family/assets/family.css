@@ -1,0 +1,610 @@
+/* Public family module */
+
+.fam {
+    color: var(--text);
+}
+
+.fam-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .65rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.fam-head__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .65rem;
+}
+
+.fam-link {
+    font-size: .85rem;
+    font-weight: 650;
+    text-decoration: none;
+    color: var(--brand, #2563eb);
+}
+
+.fam-head h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+}
+
+.fam-search {
+    display: flex;
+    gap: .35rem;
+    min-width: min(100%, 18rem);
+}
+
+.fam-search input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    padding: .4rem .7rem;
+    background: var(--bg-surface, #fff);
+    color: var(--text);
+    font-size: .9rem;
+}
+
+.fam-search button {
+    border: 0;
+    border-radius: 8px;
+    padding: .4rem .75rem;
+    background: var(--brand, #2563eb);
+    color: #fff;
+    font-size: .82rem;
+    font-weight: 650;
+}
+
+.fam-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+    gap: .75rem;
+}
+
+.fam-card {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 12px;
+    padding: .85rem 1rem;
+    background: var(--bg-surface, #fff);
+}
+
+.fam-card__photo {
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 999px;
+    object-fit: cover;
+    display: block;
+    margin-bottom: .55rem;
+    border: 2px solid var(--border, #e5e7eb);
+}
+
+.fam-profile__intro {
+    display: flex;
+    align-items: center;
+    gap: .85rem;
+}
+
+.fam-profile__photo {
+    width: 4.5rem;
+    height: 4.5rem;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 2px solid var(--border, #e5e7eb);
+    flex: 0 0 auto;
+}
+
+.fam-photo-preview,
+.fam-admin-thumb {
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 999px;
+    object-fit: cover;
+    vertical-align: middle;
+    flex: 0 0 auto;
+}
+
+.fam-photo-preview {
+    width: 5rem;
+    height: 5rem;
+    display: block;
+}
+
+.fam-admin-thumb.is-empty {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    font-size: .72rem;
+    font-weight: 700;
+    color: #64748b;
+}
+
+.fam-admin-thumb.is-empty.is-male {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+}
+
+.fam-admin-thumb.is-empty.is-female {
+    background: #fdf2f8;
+    border-color: #f9a8d4;
+    color: #be185d;
+}
+
+.fam-admin-person {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    min-width: 12rem;
+}
+
+.fam-admin-person__meta {
+    display: grid;
+    gap: .1rem;
+    min-width: 0;
+}
+
+.fam-admin-person__meta .sf-title {
+    line-height: 1.25;
+}
+
+.fam-admin-parents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .15rem .25rem;
+    max-width: 16rem;
+}
+
+.fam-admin-parents a {
+    text-decoration: none;
+    color: inherit;
+    font-size: .85rem;
+}
+
+.fam-admin-parents a:hover {
+    color: var(--brand, #2563eb);
+}
+
+.fam-admin-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: .1rem .5rem;
+    font-size: .72rem;
+    font-weight: 650;
+}
+
+.fam-admin-pill.is-male {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.fam-admin-pill.is-female {
+    background: #fdf2f8;
+    color: #be185d;
+}
+
+.fam-admin-stats {
+    margin-bottom: 1rem;
+}
+
+.fam-admin-edit-head {
+    align-items: flex-start;
+}
+
+.fam-admin-edit-intro {
+    display: flex;
+    align-items: center;
+    gap: .85rem;
+    min-width: 0;
+}
+
+.fam-admin-edit-photo {
+    width: 4.25rem;
+    height: 4.25rem;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 2px solid var(--border, #e5e7eb);
+    flex: 0 0 auto;
+}
+
+.fam-admin-edit-photo.is-empty {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    font-weight: 700;
+    background: #f8fafc;
+    color: #64748b;
+}
+
+.fam-admin-edit-photo.is-empty.is-male {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+}
+
+.fam-admin-edit-photo.is-empty.is-female {
+    background: #fdf2f8;
+    border-color: #f9a8d4;
+    color: #be185d;
+}
+
+.fam-admin-edit-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .35rem .5rem;
+    margin: .35rem 0 .2rem;
+}
+
+.fam-admin-edit-parents {
+    margin: 0;
+}
+
+.fam-admin-edit-parents a {
+    text-decoration: none;
+    color: var(--brand, #2563eb);
+    font-weight: 600;
+}
+
+.fam-admin-edit-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.fam-admin-edit-side {
+    display: grid;
+    gap: 1rem;
+}
+
+.fam-admin-link-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: .45rem;
+}
+
+.fam-admin-link-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem;
+}
+
+.fam-admin-link-list a {
+    text-decoration: none;
+    color: inherit;
+    font-weight: 600;
+}
+
+.fam-admin-link-list a:hover {
+    color: var(--brand, #2563eb);
+}
+
+@media (max-width: 991.98px) {
+    .fam-admin-edit-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fam-relate-form {
+    display: grid;
+    gap: .75rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    align-items: end;
+    margin-bottom: 1.25rem;
+}
+
+.fam-relate-form label {
+    display: grid;
+    gap: .3rem;
+    font-size: .8rem;
+    font-weight: 650;
+}
+
+.fam-relate-form select,
+.fam-relate-form button {
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    padding: .45rem .65rem;
+    background: var(--bg-surface, #fff);
+    color: inherit;
+}
+
+.fam-relate-form button {
+    background: var(--brand, #2563eb);
+    color: #fff;
+    border: 0;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.fam-relate-label {
+    font-weight: 700;
+    margin: 0 0 .65rem;
+}
+
+.fam-relate-path {
+    margin: 0;
+    padding-left: 1.15rem;
+    display: grid;
+    gap: .35rem;
+}
+
+.fam-card:hover {
+    border-color: color-mix(in srgb, var(--brand, #2563eb) 35%, var(--border, #e5e7eb));
+}
+
+.fam-card__name {
+    margin: 0 0 .25rem;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.fam-card__meta {
+    margin: 0;
+    font-size: .78rem;
+    color: var(--text-muted, #6b7280);
+}
+
+.fam-empty {
+    margin: 1.5rem 0;
+    color: var(--text-muted, #6b7280);
+}
+
+.fam-profile {
+    max-width: 52rem;
+}
+
+.fam-profile__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.fam-section {
+    margin-top: 1.25rem;
+}
+
+.fam-section h2 {
+    margin: 0 0 .65rem;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.fam-list {
+    display: grid;
+    gap: .45rem;
+}
+
+.fam-list a {
+    text-decoration: none;
+    color: inherit;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    padding: .55rem .75rem;
+    background: var(--bg-surface, #fff);
+}
+
+.fam-list a:hover {
+    border-color: color-mix(in srgb, var(--brand, #2563eb) 35%, var(--border, #e5e7eb));
+}
+
+.fam-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: .12rem .5rem;
+    font-size: .72rem;
+    font-weight: 650;
+    background: #e5e7eb;
+    color: #374151;
+}
+
+.fam-pill.is-ok { background: #dcfce7; color: #166534; }
+.fam-pill.is-off { background: #f3f4f6; color: #6b7280; }
+.fam-pill.is-warn { background: #fef3c7; color: #92400e; }
+
+/* Classic genealogy chart */
+.fam-tree-wrap {
+    overflow-x: auto;
+    padding: 1rem .25rem 2rem;
+}
+
+.ft {
+    --ft-line: #94a3b8;
+    --ft-line-ended: #cbd5e1;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 100%;
+    gap: 0;
+}
+
+.ft-gen--parents {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: .15rem;
+}
+
+.ft-person-block,
+.ft-solo,
+.ft-union,
+.ft-spouse-branch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.ft-wives-count {
+    margin: .2rem 0 .15rem;
+    font-size: .72rem;
+    font-weight: 700;
+    color: var(--brand, #2563eb);
+}
+
+.ft-couple {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+}
+
+.ft-marriage {
+    width: 2.4rem;
+    height: 2px;
+    background: var(--ft-line);
+    flex: 0 0 auto;
+}
+
+.ft-stem {
+    width: 2px;
+    height: 1.15rem;
+    background: var(--ft-line);
+    margin: 0 auto;
+}
+
+.ft-bracket {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 1.5rem;
+    position: relative;
+    padding-top: .9rem;
+}
+
+.ft-bracket::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--ft-bar-left, 0);
+    right: var(--ft-bar-right, 0);
+    height: 2px;
+    background: var(--ft-line);
+}
+
+.ft-bracket.is-single::before,
+.ft-bracket:has(> :only-child)::before {
+    display: none;
+}
+
+.ft-bracket__slot,
+.ft-spouse-branch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    min-width: 5.8rem;
+}
+
+.ft-bracket__drop {
+    width: 2px;
+    height: .9rem;
+    background: var(--ft-line);
+    margin-top: -.9rem;
+    margin-bottom: .15rem;
+}
+
+.ft-spouse-branch.is-ended {
+    opacity: .72;
+}
+
+.ft-spouse-branch.is-ended .ft-stem,
+.ft-spouse-branch.is-ended .ft-bracket__drop,
+.ft-spouse-branch.is-ended .ft-bracket::before {
+    background: var(--ft-line-ended);
+}
+
+.ft-avatar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-decoration: none;
+    color: inherit;
+    width: 5.6rem;
+    text-align: center;
+    gap: .28rem;
+}
+
+.ft-avatar__circle {
+    width: 3.1rem;
+    height: 3.1rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .82rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    border: 2px solid #cbd5e1;
+    background: #f8fafc;
+    color: #334155;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
+    overflow: hidden;
+}
+
+.ft-avatar__circle.has-photo {
+    padding: 0;
+}
+
+.ft-avatar__circle.has-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.ft-avatar.is-male .ft-avatar__circle {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.ft-avatar.is-female .ft-avatar__circle {
+    border-color: #f9a8d4;
+    background: #fdf2f8;
+    color: #be185d;
+}
+
+.ft-avatar.is-root .ft-avatar__circle {
+    border-color: var(--brand, #2563eb);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand, #2563eb) 22%, transparent);
+}
+
+.ft-avatar.is-muted {
+    opacity: .55;
+}
+
+.ft-avatar__name {
+    font-size: .78rem;
+    font-weight: 700;
+    line-height: 1.2;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+.ft-avatar__role {
+    font-size: .66rem;
+    color: var(--text-muted, #6b7280);
+    line-height: 1.2;
+}
+
+.ft-avatar:hover .ft-avatar__circle {
+    transform: translateY(-1px);
+}

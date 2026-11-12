@@ -1,0 +1,33 @@
+[
+  {
+    "name": "entries_per_page",
+    "type": "number",
+    "label": "Entries per page",
+    "description": "Default number of knowledge entries listed per page.",
+    "default": 20,
+    "min": 5,
+    "max": 100,
+    "step": 1
+  },
+  {
+    "name": "locales",
+    "type": "text",
+    "label": "Locales",
+    "description": "Comma-separated locale codes (e.g. en,so,ar).",
+    "default": "en,so,ar"
+  },
+  {
+    "name": "default_locale",
+    "type": "text",
+    "label": "Default locale",
+    "description": "Fallback locale when a translation is missing.",
+    "default": "en"
+  },
+  {
+    "name": "allow_guest_votes",
+    "type": "checkbox",
+    "label": "Allow guest votes",
+    "description": "Let visitors who are not logged in vote on entry polls.",
+    "default": true
+  }
+]

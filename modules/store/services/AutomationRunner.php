@@ -104,20 +104,30 @@ final class AutomationRunner
                         if (!class_exists(ReturnSyncService::class)) {
                             throw new RuntimeException('ReturnSyncService unavailable.');
                         }
-                        $r = (new ReturnSyncService($this->db, $this->channels, $this->factory))
-                            ->syncChannel($channel);
+                        $r = (new ReturnSyncService(
+                            $this->db,
+                            $this->factory,
+                            new ReturnRepository($this->db),
+                        ))->syncChannel($channel);
                         $created += (int) ($r['created'] ?? $r['imported'] ?? 0);
                         $updated += (int) ($r['updated'] ?? 0);
                     })(),
                     'conversations_sync' => (function () use ($channel, &$created, &$updated): void {
-                        $r = (new ConversationSyncService($this->db, $this->channels, $this->factory))
-                            ->syncChannel($channel);
+                        $r = (new ConversationSyncService(
+                            $this->db,
+                            $this->channels,
+                            $this->factory,
+                            new ConversationRepository($this->db),
+                        ))->syncChannel($channel);
                         $created += (int) ($r['created'] ?? $r['imported'] ?? 0);
                         $updated += (int) ($r['updated'] ?? 0);
                     })(),
                     'cases_sync' => (function () use ($channel, &$created, &$updated): void {
-                        $r = (new SupportCaseSyncService($this->db, $this->channels, $this->factory))
-                            ->syncChannel($channel);
+                        $r = (new SupportCaseSyncService(
+                            $this->db,
+                            $this->factory,
+                            new SupportCaseRepository($this->db),
+                        ))->syncChannel($channel);
                         $created += (int) ($r['created'] ?? $r['imported'] ?? 0);
                         $updated += (int) ($r['updated'] ?? 0);
                     })(),

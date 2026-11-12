@@ -1,0 +1,8 @@
+{
+  "name": "afaaro/family",
+  "description": "Family tree with marriages (max 4 active wives) and children.",
+  "version": "1.0.0",
+  "extra": {
+    "label": "Family"
+  }
+}

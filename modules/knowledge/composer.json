@@ -1,0 +1,8 @@
+{
+  "name": "afaaro/knowledge",
+  "description": "Multi-language knowledge base with domains and optional polls.",
+  "version": "1.0.0",
+  "extra": {
+    "label": "Knowledge"
+  }
+}

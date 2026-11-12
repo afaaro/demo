@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+use Module\Store\Services\AutomationRepository;
+use Module\Store\Services\AutomationRunner;
 use Module\Store\Services\ChannelClientFactory;
 use Module\Store\Services\ChannelRepository;
 use Module\Store\Services\ConversationRepository;
@@ -10,6 +12,8 @@ use Module\Store\Services\MessageSyncService;
 use Module\Store\Services\OrderSyncService;
 use Module\Store\Services\SupportCaseRepository;
 use Module\Store\Services\SupportCaseSyncService;
+use Module\Store\Services\SyncLogRepository;
+use Module\Store\Services\TenantContext;
 use System\Engine\Registry;
 
 /**
@@ -39,6 +43,42 @@ $bootChannels = static function (Registry $registry): array {
 };
 
 return [
+    'sf:automations:run-due' => function (Registry $registry, array $args) use ($bootChannels): int {
+        $boot = $bootChannels($registry);
+        $db = $registry->get('db');
+        $tenants = $db->query(
+            "SELECT `id`, `slug`, `name`, `status` FROM `#__store_tenants` WHERE `status` = 'active'"
+        )->rows;
+
+        $exit = 0;
+        foreach ($tenants as $tenant) {
+            TenantContext::get()->run(
+                (int) $tenant['id'],
+                (string) $tenant['slug'],
+                (string) $tenant['name'],
+                (string) $tenant['status'],
+                function () use ($db, $boot, $tenant, &$exit): void {
+                    $runner = new AutomationRunner(
+                        $db,
+                        $boot['channels'],
+                        $boot['factory'],
+                        new AutomationRepository($db),
+                        new SyncLogRepository($db),
+                    );
+                    foreach ($runner->runDue() as $result) {
+                        $line = "tenant {$tenant['id']} job {$result['id']}: {$result['status']} {$result['summary']}\n";
+                        if ($result['status'] === 'error') {
+                            fwrite(STDERR, $line);
+                            $exit = 1;
+                        } else {
+                            echo $line;
+                        }
+                    }
+                }
+            );
+        }
+        return $exit;
+    },
     'sf:sync-orders' => function (Registry $registry, array $args) use ($bootChannels): int {
         $bootChannels($registry);
         $registry->singleton('store.sync', fn($r) =>

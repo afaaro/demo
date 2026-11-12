@@ -1,0 +1,32 @@
+[
+  {
+    "name": "max_wives",
+    "type": "number",
+    "label": "Max active wives",
+    "description": "Maximum concurrent active marriages allowed for a husband.",
+    "default": 4,
+    "min": 1,
+    "max": 4,
+    "step": 1
+  },
+  {
+    "name": "tree_default_depth",
+    "type": "number",
+    "label": "Tree depth",
+    "description": "Default generations downward from the root. Use 0 for all descendants.",
+    "default": 3,
+    "min": 0,
+    "max": 100,
+    "step": 1
+  },
+  {
+    "name": "people_per_page",
+    "type": "number",
+    "label": "People per page",
+    "description": "Directory listing page size.",
+    "default": 24,
+    "min": 6,
+    "max": 100,
+    "step": 1
+  }
+]

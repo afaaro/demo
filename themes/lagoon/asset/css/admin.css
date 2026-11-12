@@ -676,6 +676,23 @@ body.admin-body:has(.sf-pm) .admin-main__inner {
     min-height: 2.25rem;
 }
 
+.admin-main .dataset-column-filters .form-control,
+.admin-main .dataset-column-filters .form-control-sm {
+    min-height: 1.65rem;
+    height: 1.65rem;
+    padding: .1rem .4rem;
+    font-size: .72rem;
+    line-height: 1.2;
+    border-radius: .35rem;
+}
+
+.admin-main .dataset-column-filters th {
+    padding-top: .35rem;
+    padding-bottom: .35rem;
+    vertical-align: middle;
+    background: #f3f4f6;
+}
+
 .admin-main .form-control:focus,
 .admin-main .form-select:focus {
     border-color: var(--admin-accent);

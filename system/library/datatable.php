@@ -341,11 +341,11 @@ class DataTable {
         $html = '<tr class="dataset-column-filters">';
         foreach ($this->columns as $key => $column) {
             $key = (string) $key;
-            $html .= '<th class="fw-normal py-2" data-col="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">';
+            $html .= '<th class="fw-normal py-1" data-col="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '">';
             if (array_key_exists($key, $this->columnSearch)) {
                 $headerText = $this->columnLabel($key, $column);
                 $html .= '<input type="search" name="c[' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . ']" '
-                    . 'class="form-control form-control-sm" '
+                    . 'class="form-control form-control-sm dataset-column-filter-input" '
                     . 'placeholder="' . htmlspecialchars($headerText, ENT_QUOTES, 'UTF-8') . '" '
                     . 'value="' . htmlspecialchars((string) $this->columnSearch[$key], ENT_QUOTES, 'UTF-8') . '">';
             }

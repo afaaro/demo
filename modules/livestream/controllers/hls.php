@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/helpers/functions.php';
 
 use Module\Livestream\Services\MediaMtxClient;
+use Module\Livestream\Services\StreamRepository;
 use System\Engine\Controller;
 use System\Engine\Exception\NotFoundException;
 
@@ -101,22 +102,36 @@ class LivestreamHls extends Controller
         exit;
     }
 
-    /** True when local MediaMTX API says this path is not publishing. */
+    /**
+     * True when we should not hit MediaMTX (avoids CDN create/close spam).
+     * Prefer live MediaMTX API; on soomaali.net fall back to studio DB idle.
+     */
     private function pathDefinitelyOffline(string $slug): bool
     {
         $api = trim((string) (livestream_config()['mediamtx_api'] ?? ''));
-        if ($api === '') {
-            return false;
-        }
-        try {
-            $client = new MediaMtxClient($api);
-            if (!$client->isReachable()) {
-                return false;
+        if ($api !== '') {
+            try {
+                $client = new MediaMtxClient($api);
+                if ($client->isReachable()) {
+                    return !$client->isPathOnline($slug);
+                }
+            } catch (\Throwable) {
+                // Fall through to DB.
             }
-            return !$client->isPathOnline($slug);
-        } catch (\Throwable) {
-            return false;
         }
+
+        // No usable API (typical on soomaali.net): trust DB for the ingest slug.
+        try {
+            $repo = new StreamRepository($this->db);
+            $stream = $repo->findBySlug(livestream_ingest_slug($slug));
+            if ($stream !== null && (($stream['status'] ?? '') !== 'live')) {
+                return true;
+            }
+        } catch (\Throwable) {
+            // Unknown — allow upstream (may 404 there).
+        }
+
+        return false;
     }
 
     /**

@@ -218,6 +218,16 @@ function livestream_h264_slug(string $slug): string
     return $slug . '_h264';
 }
 
+/** Studio/DB slug for a MediaMTX path (strips {_h264} shadow suffix). */
+function livestream_ingest_slug(string $slug): string
+{
+    $slug = strtolower(trim($slug, '/'));
+    if ($slug !== '' && str_ends_with($slug, '_h264')) {
+        return substr($slug, 0, -5);
+    }
+    return $slug;
+}
+
 function livestream_transcode_h264_enabled(): bool
 {
     $raw = livestream_config()['hls_transcode_h264'] ?? false;

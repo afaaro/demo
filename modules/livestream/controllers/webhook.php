@@ -279,9 +279,11 @@ class LivestreamWebhook extends Controller
         if (str_contains($path, '/')) {
             $statusSlug = explode('/', $path, 2)[0];
         }
+        // mogadishu_h264 → mogadishu (studio row lives on the ingest slug).
+        $statusSlug = livestream_ingest_slug($statusSlug);
         $stream = $repo->findBySlug($statusSlug);
         if ($stream === null && $statusSlug !== $path) {
-            $stream = $repo->findBySlug($path);
+            $stream = $repo->findBySlug(livestream_ingest_slug($path));
         }
         if ($stream === null) {
             // Stream may exist only on soomaali.net until first publish auth mirrors it.

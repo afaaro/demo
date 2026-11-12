@@ -58,7 +58,7 @@ class LivestreamStudio extends Controller
             }
 
             $streamId = (int) $this->request->post('stream_id', 'int', 0);
-            $stream = $repo->findOwned($streamId, $userId);
+            $stream = $repo->findAccessible($streamId, $userId);
             if ($stream === null) {
                 $this->notify->error('Stream not found.');
                 redirect_to('livestream/studio');
@@ -69,12 +69,13 @@ class LivestreamStudio extends Controller
             redirect_to('livestream/studio', ['id' => (int) $stream['id']]);
         }
 
-        $streams = $repo->listByUser($userId);
+        $ownedCount = count($repo->listByUser($userId));
+        $streams = $repo->listForStudio($userId);
         $selectedId = (int) ($this->request->get('id', 'int', 0));
         $stream = null;
 
         if ($selectedId > 0) {
-            $stream = $repo->findOwned($selectedId, $userId);
+            $stream = $repo->findAccessible($selectedId, $userId);
         }
         if ($stream === null && $streams !== []) {
             $stream = $streams[0];
@@ -117,7 +118,13 @@ class LivestreamStudio extends Controller
         $this->view->addModuleStyle('livestream', 'livestream.css');
 
         $csrf = $this->request->csrfToken();
-        $canCreate = count($streams) < self::MAX_STREAMS_PER_USER;
+        $canCreate = $ownedCount < self::MAX_STREAMS_PER_USER;
+        $isOwner = $stream !== null && (($stream['access'] ?? 'owner') === 'owner');
+        $managers = $isOwner ? $repo->listManagers((int) $stream['id']) : [];
+        $studioShareToken = (new StreamRepository($this->db))->studioShareToken($userId);
+        $studioShareUrl = $studioShareToken !== ''
+            ? url('livestream/share-all', ['token' => $studioShareToken], true)
+            : '';
         $statsUrl = $stream !== null
             ? url('livestream/studio/stats', ['id' => (int) $stream['id']])
             : '';
@@ -142,7 +149,10 @@ class LivestreamStudio extends Controller
             $cfg,
             $csrf,
             $canCreate,
-            $statsUrl
+            $statsUrl,
+            $studioShareUrl,
+            $isOwner,
+            $managers
         ): void {
             include get_module_path('livestream') . '/views/studio.php';
         }, 'main', [
@@ -166,8 +176,11 @@ class LivestreamStudio extends Controller
             'srtPort'       => $srtPort,
             'cfg'           => $cfg,
             'csrf'          => $csrf,
-            'canCreate'     => $canCreate,
-            'statsUrl'      => $statsUrl,
+            'canCreate'      => $canCreate,
+            'statsUrl'       => $statsUrl,
+            'studioShareUrl' => $studioShareUrl,
+            'isOwner'        => $isOwner,
+            'managers'       => $managers,
         ]);
     }
 
@@ -191,7 +204,7 @@ class LivestreamStudio extends Controller
 
         $repo = new StreamRepository($this->db);
         $streamId = (int) $this->request->get('id', 'int', 0);
-        $stream = $repo->findOwned($streamId, $userId);
+        $stream = $repo->findAccessible($streamId, $userId);
         if ($stream === null) {
             http_response_code(404);
             echo json_encode(['ok' => false, 'error' => 'not found']);
@@ -311,7 +324,7 @@ class LivestreamStudio extends Controller
 
         $repo = new StreamRepository($this->db);
         $streamId = (int) $this->request->post('stream_id', 'int', 0);
-        $stream = $repo->findOwned($streamId, $userId);
+        $stream = $repo->findAccessible($streamId, $userId);
         if ($stream === null) {
             $this->notify->error('No stream found.');
             redirect_to('livestream/studio');
@@ -342,5 +355,222 @@ class LivestreamStudio extends Controller
 
         $this->notify->success('Stream deleted.');
         redirect_to('livestream/studio');
+    }
+
+    public function addManagerAction(): void
+    {
+        $stream = $this->ownedStreamFromPost();
+        if ($stream === null) {
+            return;
+        }
+        $repo = new StreamRepository($this->db);
+        $username = trim((string) $this->request->post('username', 'string', ''));
+        $managerId = $repo->findUserIdByUsername($username);
+        $error = $repo->addManager((int) $stream['id'], (int) $stream['user_id'], $managerId);
+        if ($error !== '') {
+            $this->notify->error($error);
+        } else {
+            $this->notify->success($username . ' can now edit this stream and rotate its key.');
+        }
+        redirect_to('livestream/studio', ['id' => (int) $stream['id']]);
+    }
+
+    public function removeManagerAction(): void
+    {
+        $stream = $this->ownedStreamFromPost();
+        if ($stream === null) {
+            return;
+        }
+        $managerId = (int) $this->request->post('manager_id', 'int', 0);
+        $ok = (new StreamRepository($this->db))->removeManager(
+            (int) $stream['id'],
+            (int) $stream['user_id'],
+            $managerId
+        );
+        $this->notify->{$ok ? 'success' : 'error'}($ok ? 'Manager removed.' : 'Manager not found.');
+        redirect_to('livestream/studio', ['id' => (int) $stream['id']]);
+    }
+
+    public function enableShareAllAction(): void
+    {
+        if (!livestream_enabled()) {
+            redirect_to('');
+        }
+        $userId = (int) ($this->auth->id() ?? 0);
+        if ($userId < 1 || !$this->request->isPost() || !$this->request->verifyToken()) {
+            $this->notify->error('Invalid request.');
+            redirect_to('livestream/studio');
+        }
+        (new StreamRepository($this->db))->ensureStudioShare($userId);
+        $this->notify->success('Link ready. It lists broadcast settings for every stream you own, including ones you add later.');
+        redirect_to('livestream/studio');
+    }
+
+    public function revokeShareAllAction(): void
+    {
+        if (!livestream_enabled()) {
+            redirect_to('');
+        }
+        $userId = (int) ($this->auth->id() ?? 0);
+        if ($userId < 1 || !$this->request->isPost() || !$this->request->verifyToken()) {
+            $this->notify->error('Invalid request.');
+            redirect_to('livestream/studio');
+        }
+        (new StreamRepository($this->db))->revokeStudioShare($userId);
+        $this->notify->success('All-streams share link revoked.');
+        redirect_to('livestream/studio');
+    }
+
+    public function shareAllAction(): void
+    {
+        if (!livestream_enabled()) {
+            $this->notify->error('Livestream is currently disabled.');
+            redirect_to('');
+        }
+
+        $repo = new StreamRepository($this->db);
+        $token = trim((string) $this->request->get('token', 'string', ''));
+        $userId = $repo->userIdByStudioShare($token);
+        if ($userId < 1) {
+            $this->notify->error('This share link is invalid or has been revoked.');
+            redirect_to('livestream');
+        }
+
+        $streams = $repo->listByUser($userId, 20);
+        $cards = [];
+        foreach ($streams as $row) {
+            $slug = (string) ($row['slug'] ?? '');
+            $key = (string) ($row['stream_key'] ?? '');
+            if ($slug === '' || $key === '') {
+                continue;
+            }
+            $cards[] = [
+                'title'      => (string) ($row['title'] ?? $slug),
+                'slug'       => $slug,
+                'status'     => (string) ($row['status'] ?? 'idle'),
+                'obsUrl'     => livestream_obs_srt_url($slug, $key),
+                'rtmpUrl'    => livestream_rtmp_url($slug, $key),
+                'rtmpServer' => livestream_rtmp_server($slug),
+                'rtmpUser'   => 'obs',
+                'rtmpPass'   => $key,
+                'watchUrl'   => url('livestream/watch', ['slug' => $slug]),
+            ];
+        }
+
+        $title = 'All broadcast settings';
+        $this->view->assign('title', $title);
+        $this->view->setTitle($title);
+        $this->view->addModuleStyle('livestream', 'livestream.css');
+        $rtmpPort = (int) (livestream_config()['rtmp_port'] ?? 1935);
+
+        echo $this->view->inline(function () use ($cards, $rtmpPort): void {
+            include get_module_path('livestream') . '/views/share_all.php';
+        }, 'main', [
+            'title'    => $title,
+            'cards'    => $cards,
+            'rtmpPort' => $rtmpPort,
+        ]);
+    }
+
+    public function enableShareAction(): void
+    {
+        $stream = $this->ownedStreamFromPost();
+        if ($stream === null) {
+            return;
+        }
+        (new StreamRepository($this->db))->ensureShareToken((int) $stream['id']);
+        $this->notify->success('Share link ready. Anyone with it can broadcast on this stream.');
+        redirect_to('livestream/studio', ['id' => (int) $stream['id']]);
+    }
+
+    public function revokeShareAction(): void
+    {
+        $stream = $this->ownedStreamFromPost();
+        if ($stream === null) {
+            return;
+        }
+        (new StreamRepository($this->db))->revokeShareToken((int) $stream['id']);
+        $this->notify->success('Share link revoked. Old links no longer work.');
+        redirect_to('livestream/studio', ['id' => (int) $stream['id']]);
+    }
+
+    /**
+     * Public broadcast settings for one stream. No studio controls.
+     */
+    public function shareAction(): void
+    {
+        if (!livestream_enabled()) {
+            $this->notify->error('Livestream is currently disabled.');
+            redirect_to('');
+        }
+
+        $token = trim((string) $this->request->get('token', 'string', ''));
+        $stream = (new StreamRepository($this->db))->findByShareToken($token);
+        if ($stream === null) {
+            $this->notify->error('This share link is invalid or has been revoked.');
+            redirect_to('livestream');
+        }
+
+        $cfg = livestream_config();
+        $slug = (string) $stream['slug'];
+        $key = (string) $stream['stream_key'];
+        $title = 'Broadcast settings';
+        $this->view->assign('title', $title);
+        $this->view->setTitle($title);
+        $this->view->addModuleStyle('livestream', 'livestream.css');
+
+        $obsUrl = livestream_obs_srt_url($slug, $key);
+        $rtmpUrl = livestream_rtmp_url($slug, $key);
+        $rtmpServer = livestream_rtmp_server($slug);
+        $rtmpUser = 'obs';
+        $rtmpPass = $key;
+        $rtmpPort = (int) ($cfg['rtmp_port'] ?? 1935);
+        $watchUrl = url('livestream/watch', ['slug' => $slug]);
+
+        echo $this->view->inline(function () use (
+            $stream,
+            $obsUrl,
+            $rtmpUrl,
+            $rtmpServer,
+            $rtmpUser,
+            $rtmpPass,
+            $rtmpPort,
+            $watchUrl,
+        ): void {
+            include get_module_path('livestream') . '/views/share.php';
+        }, 'main', [
+            'title'      => $title,
+            'stream'     => $stream,
+            'obsUrl'     => $obsUrl,
+            'rtmpUrl'    => $rtmpUrl,
+            'rtmpServer' => $rtmpServer,
+            'rtmpUser'   => $rtmpUser,
+            'rtmpPass'   => $rtmpPass,
+            'rtmpPort'   => $rtmpPort,
+            'watchUrl'   => $watchUrl,
+        ]);
+    }
+
+    /** @return array<string, mixed>|null */
+    private function ownedStreamFromPost(): ?array
+    {
+        if (!livestream_enabled()) {
+            redirect_to('');
+            return null;
+        }
+        $userId = (int) ($this->auth->id() ?? 0);
+        if ($userId < 1 || !$this->request->isPost() || !$this->request->verifyToken()) {
+            $this->notify->error('Invalid request.');
+            redirect_to('livestream/studio');
+            return null;
+        }
+        $repo = new StreamRepository($this->db);
+        $stream = $repo->findOwned((int) $this->request->post('stream_id', 'int', 0), $userId);
+        if ($stream === null) {
+            $this->notify->error('Stream not found.');
+            redirect_to('livestream/studio');
+            return null;
+        }
+        return $stream;
     }
 }

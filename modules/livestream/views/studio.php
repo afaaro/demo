@@ -10,10 +10,15 @@
 /** @var string $csrf */
 /** @var bool $canCreate */
 /** @var string $statsUrl */
+/** @var string $studioShareUrl */
+/** @var bool $isOwner */
+/** @var list<array<string,mixed>> $managers */
 $e = static fn(string|int|float $v): string => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $streams = $streams ?? [];
 $stream = $stream ?? null;
 $canCreate = $canCreate ?? true;
+$isOwner = $isOwner ?? false;
+$managers = $managers ?? [];
 $selectedId = (int) ($stream['id'] ?? 0);
 ?>
 <div class="ls-shell">
@@ -21,6 +26,30 @@ $selectedId = (int) ($stream['id'] ?? 0);
     <h1>Livestream studio</h1>
     <a class="ls-btn is-ghost" href="<?= $e(url('livestream')) ?>">Directory</a>
   </header>
+
+  <section class="ls-section">
+    <h2>Share all streams</h2>
+    <p class="ls-muted">One link with the broadcast settings for every stream on this account. New streams show up on the same link. It does not open your studio.</p>
+    <?php if (($studioShareUrl ?? '') !== ''): ?>
+      <label class="ls-copy-field">
+        All-streams link
+        <div class="ls-copy-row">
+          <input type="text" id="ls-share-all-url" readonly value="<?= $e($studioShareUrl) ?>">
+          <button type="button" class="ls-btn" data-ls-copy="ls-share-all-url">Copy</button>
+        </div>
+      </label>
+      <form method="post" action="<?= $e(url('livestream/studio/unshare-all')) ?>" style="margin-top:.75rem"
+            onsubmit="return confirm('Revoke the all-streams link?');">
+        <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+        <button type="submit" class="ls-btn is-danger">Revoke all-streams link</button>
+      </form>
+    <?php else: ?>
+      <form method="post" action="<?= $e(url('livestream/studio/share-all')) ?>">
+        <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+        <button type="submit" class="ls-btn">Create link for all streams</button>
+      </form>
+    <?php endif; ?>
+  </section>
 
   <section class="ls-section">
     <h2>Your streams</h2>
@@ -33,6 +62,7 @@ $selectedId = (int) ($stream['id'] ?? 0);
             $id = (int) ($row['id'] ?? 0);
             $isActive = $id === $selectedId;
             $isLive = (($row['status'] ?? '') === 'live');
+            $isShared = (($row['access'] ?? 'owner') !== 'owner');
           ?>
           <li class="<?= $isActive ? 'is-active' : '' ?>">
             <a href="<?= $e(url('livestream/studio', ['id' => $id])) ?>">
@@ -40,6 +70,9 @@ $selectedId = (int) ($stream['id'] ?? 0);
                 <span class="ls-badge">LIVE</span>
               <?php else: ?>
                 <span class="ls-badge is-off">Idle</span>
+              <?php endif; ?>
+              <?php if ($isShared): ?>
+                <span class="ls-badge is-off">Shared</span>
               <?php endif; ?>
               <span class="ls-stream-list-title"><?= $e((string) ($row['title'] ?? '')) ?></span>
               <code><?= $e((string) ($row['slug'] ?? '')) ?></code>
@@ -261,6 +294,7 @@ $selectedId = (int) ($stream['id'] ?? 0);
           </div>
         </details>
 
+        <?php if ($isOwner): ?>
         <details class="ls-acc">
           <summary class="ls-acc-sum">
             <span class="ls-acc-title">MediaMTX <span class="ls-acc-tag">Webhooks</span></span>
@@ -285,7 +319,77 @@ $selectedId = (int) ($stream['id'] ?? 0);
             </ul>
           </div>
         </details>
+        <?php endif; ?>
       </div>
+
+      <?php if (!$isOwner): ?>
+        <p class="ls-muted">Shared with you. You can edit the title and rotate the key. You cannot delete this stream or change who can access it.</p>
+      <?php endif; ?>
+
+      <?php if ($isOwner): ?>
+      <?php
+        $shareToken = trim((string) ($stream['share_token'] ?? ''));
+        $shareUrl = $shareToken !== ''
+            ? url('livestream/share', ['token' => $shareToken], true)
+            : '';
+      ?>
+      <div class="ls-section" style="margin-top:1.25rem">
+        <h2>Share broadcast settings</h2>
+        <p class="ls-muted">Send this link to someone who should go live on this stream. It shows the encoder URLs and stream key only — not your studio login. Rotate the key if you need to cut them off after they already copied it; revoke the link to stop the page.</p>
+        <?php if ($shareUrl !== ''): ?>
+          <label class="ls-copy-field">
+            Share link
+            <div class="ls-copy-row">
+              <input type="text" id="ls-share-url" readonly value="<?= $e($shareUrl) ?>">
+              <button type="button" class="ls-btn" data-ls-copy="ls-share-url">Copy</button>
+            </div>
+          </label>
+          <form method="post" action="<?= $e(url('livestream/studio/unshare')) ?>" style="margin-top:.75rem"
+                onsubmit="return confirm('Revoke this share link?');">
+            <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+            <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
+            <button type="submit" class="ls-btn is-danger">Revoke share link</button>
+          </form>
+        <?php else: ?>
+          <form method="post" action="<?= $e(url('livestream/studio/share')) ?>">
+            <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+            <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
+            <button type="submit" class="ls-btn">Create share link</button>
+          </form>
+        <?php endif; ?>
+      </div>
+
+      <div class="ls-section" style="margin-top:1.25rem">
+        <h2>Managers</h2>
+        <p class="ls-muted">A manager sees this stream in their studio. They can edit the title and rotate the key. They cannot delete it, share links, or invite anyone else.</p>
+        <?php if ($managers === []): ?>
+          <p class="ls-muted">No managers yet.</p>
+        <?php else: ?>
+          <ul class="ls-stream-list">
+            <?php foreach ($managers as $manager): ?>
+              <li>
+                <span class="ls-stream-list-title"><?= $e((string) ($manager['username'] ?? '')) ?></span>
+                <form method="post" action="<?= $e(url('livestream/studio/managers/remove')) ?>" style="display:inline">
+                  <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+                  <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
+                  <input type="hidden" name="manager_id" value="<?= (int) ($manager['user_id'] ?? 0) ?>">
+                  <button type="submit" class="ls-btn is-ghost">Remove</button>
+                </form>
+              </li>
+            <?php endforeach; ?>
+          </ul>
+        <?php endif; ?>
+        <form method="post" action="<?= $e(url('livestream/studio/managers/add')) ?>" class="ls-form">
+          <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
+          <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
+          <label class="ls-copy-field">
+            Username
+            <input type="text" name="username" required maxlength="64" autocomplete="off">
+          </label>
+          <button type="submit" class="ls-btn">Add manager</button>
+        </form>
+      </div>
+      <?php endif; ?>
 
       <div class="ls-actions">
         <form method="post" action="<?= $e(url('livestream/studio/rotate')) ?>"
@@ -294,12 +398,14 @@ $selectedId = (int) ($stream['id'] ?? 0);
           <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
           <button type="submit" class="ls-btn is-danger">Rotate stream key</button>
         </form>
+        <?php if ($isOwner): ?>
         <form method="post" action="<?= $e(url('livestream/studio/delete')) ?>"
               onsubmit="return confirm('Delete this stream permanently?');">
           <input type="hidden" name="_csrf_token" value="<?= $e($csrf) ?>">
           <input type="hidden" name="stream_id" value="<?= (int) $stream['id'] ?>">
           <button type="submit" class="ls-btn is-ghost">Delete stream</button>
         </form>
+        <?php endif; ?>
       </div>
     </section>
   <?php endif; ?>
