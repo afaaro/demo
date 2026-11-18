@@ -2,6 +2,7 @@ vendor/
 uploads/*
 storage/*
 *.sql
+config.php
 system/config/store.php
 system/config/captcha.php
 system/config/database.php
