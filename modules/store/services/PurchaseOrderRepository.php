@@ -58,13 +58,130 @@ final class PurchaseOrderRepository
                           FROM `#__store_purchase_order_lines` l
                          WHERE {$lineScope}) AS total_value
                   FROM `#__store_purchase_orders` po";
+        $built = $this->searchClauses($filters);
+        $sql .= ' WHERE ' . implode(' AND ', $built['clauses']);
+        $sql .= ' ORDER BY po.`id` DESC LIMIT ' . (int) $limit . ' OFFSET ' . (int) $offset;
+
+        return $this->db->query($sql, $built['params'])->rows;
+    }
+
+    /** @param array<string, mixed> $filters */
+    public function count(array $filters = []): int
+    {
+        if (!TenantContext::get()->has()) {
+            return 0;
+        }
+        $built = $this->searchClauses($filters);
+        $sql = 'SELECT COUNT(*) FROM `#__store_purchase_orders` po WHERE ' . implode(' AND ', $built['clauses']);
+        return (int) $this->db->query($sql, $built['params'])->value;
+    }
+
+    /**
+     * @param list<int> $poIds
+     * @return array<int, list<array{sku: string, supplier_sku: string, product_id: int}>>
+     */
+    public function lineSkuMap(array $poIds): array
+    {
+        $poIds = array_values(array_unique(array_filter(
+            array_map('intval', $poIds),
+            static fn(int $id): bool => $id > 0
+        )));
+        if ($poIds === [] || !TenantContext::get()->has()) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($poIds), '?'));
+        $rows = $this->db->query(
+            "SELECT l.`po_id`,
+                    COALESCE(NULLIF(v.`sku`, ''), l.`sku`) AS sku,
+                    COALESCE(p.`supplier_sku`, '') AS supplier_sku,
+                    COALESCE(p.`id`, 0) AS product_id
+               FROM `#__store_purchase_order_lines` l
+               LEFT JOIN `#__store_product_variants` v
+                 ON v.`id` = l.`variant_id` AND v.`tenant_id` = l.`tenant_id`
+               LEFT JOIN `#__store_products` p
+                 ON p.`id` = v.`product_id` AND p.`tenant_id` = l.`tenant_id`
+              WHERE l.`tenant_id` = ?
+                AND l.`po_id` IN ({$placeholders})
+              ORDER BY l.`id` ASC",
+            [$this->tenantId(), ...$poIds]
+        )->rows;
+
+        $out = [];
+        foreach ($rows as $row) {
+            $poId = (int) $row['po_id'];
+            $out[$poId][] = [
+                'sku'          => (string) ($row['sku'] ?? ''),
+                'supplier_sku' => (string) ($row['supplier_sku'] ?? ''),
+                'product_id'   => (int) ($row['product_id'] ?? 0),
+            ];
+        }
+        return $out;
+    }
+
+    public function setPaid(int $id, ?string $date): void
+    {
+        if ($this->find($id) === null) {
+            throw new RuntimeException('Purchase order not found.');
+        }
+        $this->ensureHeaderColumns();
+        $this->db->query(
+            'UPDATE `#__store_purchase_orders`
+                SET `paid_on` = ?, `updated_at` = ?
+              WHERE `id` = ? AND `tenant_id` = ?',
+            [$date, date('Y-m-d H:i:s'), $id, $this->tenantId()]
+        );
+    }
+
+    public function setArchived(int $id, bool $archived): void
+    {
+        if ($this->find($id) === null) {
+            throw new RuntimeException('Purchase order not found.');
+        }
+        $this->ensureArchivedColumn();
+        $this->db->query(
+            'UPDATE `#__store_purchase_orders`
+                SET `archived` = ?, `updated_at` = ?
+              WHERE `id` = ? AND `tenant_id` = ?',
+            [$archived ? 1 : 0, date('Y-m-d H:i:s'), $id, $this->tenantId()]
+        );
+    }
+
+    /** @return list<string> */
+    public function raisedByOptions(): array
+    {
+        if (!TenantContext::get()->has()) {
+            return [];
+        }
+        $rows = $this->db->query(
+            "SELECT DISTINCT `raised_by`
+               FROM `#__store_purchase_orders`
+              WHERE `tenant_id` = ? AND TRIM(`raised_by`) <> ''
+              ORDER BY `raised_by` ASC",
+            [$this->tenantId()]
+        )->rows;
+        $out = [];
+        foreach ($rows as $row) {
+            $name = trim((string) ($row['raised_by'] ?? ''));
+            if ($name !== '') {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     * @return array{clauses: list<string>, params: list<mixed>}
+     */
+    private function searchClauses(array $filters): array
+    {
+        $lineScope = 'l.`po_id` = po.`id` AND l.`tenant_id` = po.`tenant_id`';
         $clauses = [$this->tenantClause('po')];
         $params = [$this->tenantId()];
-
         $id = trim((string) ($filters['id'] ?? ''));
         if ($id !== '') {
-            $clauses[] = 'CAST(po.`id` AS CHAR) LIKE ?';
-            $params[] = '%' . $id . '%';
+            $clauses[] = '(CAST(po.`id` AS CHAR) LIKE ? OR po.`reference` LIKE ?)';
+            array_push($params, '%' . $id . '%', '%' . $id . '%');
         }
         $supplier = trim((string) ($filters['supplier'] ?? ''));
         if ($supplier !== '') {
@@ -81,38 +198,54 @@ final class PurchaseOrderRepository
             $clauses[] = 'po.`status` = ?';
             $params[] = $status;
         }
-        $raisedFrom = trim((string) ($filters['raised_from'] ?? ''));
-        if ($raisedFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $raisedFrom)) {
-            $clauses[] = 'DATE(po.`created_at`) >= ?';
-            $params[] = $raisedFrom;
+        foreach (['raised_from' => '>=', 'raised_to' => '<='] as $key => $op) {
+            $value = trim((string) ($filters[$key] ?? ''));
+            if ($value !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+                $clauses[] = "DATE(po.`created_at`) {$op} ?";
+                $params[] = $value;
+            }
         }
-        $raisedTo = trim((string) ($filters['raised_to'] ?? ''));
-        if ($raisedTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $raisedTo)) {
-            $clauses[] = 'DATE(po.`created_at`) <= ?';
-            $params[] = $raisedTo;
-        }
-        $dueFrom = trim((string) ($filters['due_from'] ?? ''));
-        if ($dueFrom !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dueFrom)) {
-            $clauses[] = 'po.`expected_date` >= ?';
-            $params[] = $dueFrom;
-        }
-        $dueTo = trim((string) ($filters['due_to'] ?? ''));
-        if ($dueTo !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dueTo)) {
-            $clauses[] = 'po.`expected_date` <= ?';
-            $params[] = $dueTo;
+        foreach (['due_from' => '>=', 'due_to' => '<='] as $key => $op) {
+            $value = trim((string) ($filters[$key] ?? ''));
+            if ($value !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+                $clauses[] = "po.`expected_date` {$op} ?";
+                $params[] = $value;
+            }
         }
         $linesQ = trim((string) ($filters['lines_q'] ?? ''));
         if ($linesQ !== '' && ctype_digit($linesQ)) {
             $clauses[] = "(SELECT COUNT(*) FROM `#__store_purchase_order_lines` l WHERE {$lineScope}) = ?";
             $params[] = (int) $linesQ;
         }
-
-        if ($clauses !== []) {
-            $sql .= ' WHERE ' . implode(' AND ', $clauses);
+        $raisedBy = trim((string) ($filters['raised_by'] ?? ''));
+        if ($raisedBy !== '') {
+            $clauses[] = 'po.`raised_by` = ?';
+            $params[] = $raisedBy;
         }
-        $sql .= ' ORDER BY po.`id` DESC LIMIT ' . (int) $limit . ' OFFSET ' . (int) $offset;
-
-        return $this->db->query($sql, $params)->rows;
+        $sku = trim((string) ($filters['sku'] ?? ''));
+        if ($sku !== '') {
+            $clauses[] = "EXISTS (
+                SELECT 1 FROM `#__store_purchase_order_lines` l
+                  LEFT JOIN `#__store_product_variants` v
+                    ON v.`id` = l.`variant_id` AND v.`tenant_id` = l.`tenant_id`
+                  LEFT JOIN `#__store_products` p
+                    ON p.`id` = v.`product_id` AND p.`tenant_id` = l.`tenant_id`
+                 WHERE {$lineScope}
+                   AND (v.`sku` LIKE ? OR l.`sku` LIKE ? OR p.`supplier_sku` LIKE ?)
+            )";
+            $like = '%' . $sku . '%';
+            array_push($params, $like, $like, $like);
+        }
+        $mode = trim((string) ($filters['mode'] ?? ''));
+        if ($mode !== '') {
+            $clauses[] = 'po.`created_via` = ?';
+            $params[] = $mode;
+        }
+        $this->ensureArchivedColumn();
+        if (empty($filters['show_archived'])) {
+            $clauses[] = 'COALESCE(po.`archived`, 0) = 0';
+        }
+        return ['clauses' => $clauses, 'params' => $params];
     }
 
     /**
@@ -137,6 +270,40 @@ final class PurchaseOrderRepository
             "SELECT * FROM `#__store_purchase_orders` WHERE `id` = ? AND `tenant_id` = ? LIMIT 1",
             [$id, $this->tenantId()]
         )->row;
+        return $row === [] ? null : $row;
+    }
+
+    /**
+     * Latest untouched manual draft for this user.
+     * Opening purchase-orders/add reuses it instead of inserting another row.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findReusableManualDraft(string $raisedBy): ?array
+    {
+        if (!TenantContext::get()->has()) {
+            return null;
+        }
+        $this->ensureHeaderColumns();
+        $row = $this->db->query(
+            "SELECT po.*
+               FROM `#__store_purchase_orders` po
+              WHERE po.`tenant_id` = ?
+                AND po.`status` = ?
+                AND TRIM(po.`supplier_name`) = ''
+                AND po.`raised_by` = ?
+                AND po.`created_via` IN ('Manual', '')
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM `#__store_purchase_order_lines` l
+                     WHERE l.`po_id` = po.`id`
+                       AND l.`tenant_id` = po.`tenant_id`
+                )
+              ORDER BY po.`id` DESC
+              LIMIT 1",
+            [$this->tenantId(), self::STATUS_DRAFT, mb_substr(trim($raisedBy), 0, 128)]
+        )->row;
+
         return $row === [] ? null : $row;
     }
 
@@ -724,6 +891,43 @@ final class PurchaseOrderRepository
      * @param list<int> $variantIds
      * @return array<int, int>
      */
+    /**
+     * Open / recent PO lines for a product (Deliveries tab).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function deliveriesForProduct(int $productId, int $limit = 50): array
+    {
+        if ($productId <= 0 || !TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        return $this->db->query(
+            "SELECT po.`id` AS po_id, po.`reference`, po.`status`, po.`supplier_name`, po.`warehouse`,
+                    po.`expected_date`, po.`created_at`,
+                    l.`id` AS line_id, l.`sku`, l.`qty_ordered`, l.`qty_received`, l.`qty_written_off`,
+                    GREATEST(l.`qty_ordered` - l.`qty_received` - l.`qty_written_off`, 0) AS open_qty,
+                    v.`id` AS variant_id
+               FROM `#__store_purchase_order_lines` l
+               INNER JOIN `#__store_purchase_orders` po
+                 ON po.`id` = l.`po_id` AND po.`tenant_id` = l.`tenant_id`
+               INNER JOIN `#__store_product_variants` v
+                 ON v.`id` = l.`variant_id` AND v.`tenant_id` = l.`tenant_id`
+              WHERE v.`product_id` = ?
+                AND po.`tenant_id` = ?
+                AND po.`status` IN (?, ?, ?)
+              ORDER BY COALESCE(po.`expected_date`, po.`created_at`) DESC, po.`id` DESC
+              LIMIT {$limit}",
+            [
+                $productId,
+                $this->tenantId(),
+                self::STATUS_DRAFT,
+                self::STATUS_CONFIRMED,
+                self::STATUS_RECEIVED,
+            ]
+        )->rows;
+    }
+
     public function openQtyByVariant(array $variantIds): array
     {
         $variantIds = array_values(array_unique(array_filter(
@@ -972,7 +1176,7 @@ final class PurchaseOrderRepository
         }
         $supplier = trim($supplier);
         if ($supplier !== '') {
-            $clauses[] = 'p.`supplier_name` = ?';
+            $clauses[] = 'LOWER(TRIM(p.`supplier_name`)) = LOWER(?)';
             $params[] = $supplier;
         }
 
@@ -1128,6 +1332,28 @@ final class PurchaseOrderRepository
             if ($has === 0) {
                 $this->db->query("ALTER TABLE `#__store_purchase_orders` ADD COLUMN `{$name}` {$ddl}");
             }
+        }
+    }
+
+    private function ensureArchivedColumn(): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $done = true;
+        $table = $this->db->getPrefix() . 'store_purchase_orders';
+        $has = (int) $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = ?
+                AND COLUMN_NAME = 'archived'",
+            [$table]
+        )->value;
+        if ($has === 0) {
+            $this->db->query(
+                "ALTER TABLE `#__store_purchase_orders` ADD COLUMN `archived` tinyint(1) NOT NULL DEFAULT 0"
+            );
         }
     }
 

@@ -12,9 +12,12 @@
 }
 .sf-pm-head h1 {
     margin: 0;
-    font-size: 1.35rem;
+    font-size: 1.2rem;
     font-weight: 650;
-    letter-spacing: -.02em;
+    color: #4a5b6b;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
 }
 .sf-pm-tools {
     display: flex;
@@ -59,21 +62,46 @@
     justify-content: space-between;
     gap: .55rem;
     margin-bottom: .75rem;
-    padding: .55rem .75rem;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: .7rem;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+    padding: .45rem .6rem;
+    background: #5f87a8;
+    border: 0;
+    border-radius: .35rem;
+    color: #fff;
 }
 .sf-pm-toolbar select {
     height: 2rem;
-    border: 1px solid #d1d5db;
-    border-radius: .45rem;
+    border: 1px solid transparent;
+    border-radius: 1rem;
     padding: 0 .5rem;
     font-size: .8rem;
     background: #fff;
 }
-.sf-pm-count { color: #6b7280; font-size: .8rem; font-weight: 600; }
+.sf-pm-toolbar .sf-btn {
+    border-radius: 1rem;
+    background: #7fa3bf;
+    border-color: transparent;
+    color: #fff;
+}
+.sf-pm-toolbar .sf-btn:hover { background: #6b91ad; color: #fff; }
+.sf-pm-count { color: rgba(255,255,255,.92) !important; font-size: .8rem; font-weight: 600; }
+.sf-pm .sf-btn.is-primary {
+    background: #7ac143;
+    border-color: transparent;
+    border-radius: 1rem;
+    color: #fff;
+}
+.sf-pm .sf-btn.is-primary:hover { background: #69a838; color: #fff; }
+.sf-pm-table th:first-child,
+.sf-pm-table td:first-child { text-align: center; width: 2rem; }
+.sf-pm-table .form-check-input,
+.sf-pm #bulk-select-all {
+    appearance: auto;
+    -webkit-appearance: checkbox;
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    accent-color: #2563eb;
+}
 
 .sf-pm-card {
     background: #fff;

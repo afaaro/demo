@@ -414,6 +414,13 @@ return [
         'auth'       => true,
         'methods'    => ['GET'],
     ],
+    'store/admin/purchase-orders/import' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'import',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'csrf'       => true,
+    ],
     'store/admin/purchase-orders/add' => [
         'controller' => 'store/admin/purchase_orders',
         'action'     => 'add',
@@ -423,6 +430,13 @@ return [
     'store/admin/purchase-orders/view' => [
         'controller' => 'store/admin/purchase_orders',
         'action'     => 'view',
+        'auth'       => true,
+        'methods'    => ['GET'],
+        'params'     => ['id'],
+    ],
+    'store/admin/purchase-orders/catalog' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'catalog',
         'auth'       => true,
         'methods'    => ['GET'],
         'params'     => ['id'],
@@ -507,6 +521,12 @@ return [
     'store/admin/purchase-orders/book-in-bulk' => [
         'controller' => 'store/admin/purchase_orders',
         'action'     => 'bookInBulk',
+        'auth'       => true,
+        'methods'    => ['POST'],
+    ],
+    'store/admin/purchase-orders/bulk' => [
+        'controller' => 'store/admin/purchase_orders',
+        'action'     => 'bulk',
         'auth'       => true,
         'methods'    => ['POST'],
     ],
@@ -1401,6 +1421,44 @@ return [
         'action'     => 'new',
         'auth'       => true,
         'methods'    => ['GET', 'POST'],
+    ],
+    'store/admin/orders/import' => [
+        'controller' => 'store/admin/orders',
+        'action'     => 'import',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'csrf'       => true,
+    ],
+    'store/admin/disputes' => [
+        'controller' => 'store/admin/disputes',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/reports' => [
+        'controller' => 'store/admin/reports',
+        'action'     => 'index',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/warehouse/deliveries' => [
+        'controller' => 'store/admin/warehouse',
+        'action'     => 'deliveries',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/warehouse/manifests' => [
+        'controller' => 'store/admin/warehouse',
+        'action'     => 'manifests',
+        'auth'       => true,
+        'methods'    => ['GET'],
+    ],
+    'store/admin/warehouse/courier-export' => [
+        'controller' => 'store/admin/warehouse',
+        'action'     => 'courierExport',
+        'auth'       => true,
+        'methods'    => ['GET', 'POST'],
+        'csrf'       => true,
     ],
     'store/admin/orders/bulk' => [
         'controller' => 'store/admin/orders',

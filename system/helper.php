@@ -479,30 +479,67 @@ function redirect_to(string $route = '', array $params = []): never {
  */
 function redirect_external(string $url, int $code = 302): never
 {
-    static $allowedHosts = [
-        'auth.ebay.com',
-        'auth.sandbox.ebay.com',
-        'signin.ebay.com',
-        'signin.sandbox.ebay.com',
-        'accounts.shopify.com',
-        'www.shopify.com',
-    ];
-
-    $parsed = parse_url($url);
+    $parsed = parse_url(trim($url));
+    $host = strtolower((string) ($parsed['host'] ?? ''));
+    $scheme = strtolower((string) ($parsed['scheme'] ?? ''));
 
     if ($parsed === false
-        || !isset($parsed['scheme'], $parsed['host'])
-        || !in_array(strtolower($parsed['scheme']), ['http', 'https'], true)
-        || !in_array(strtolower($parsed['host']), $allowedHosts, true)
+        || $host === ''
+        || !in_array($scheme, ['http', 'https'], true)
+        || !external_redirect_host_allowed($host)
     ) {
-        registry('log')->error('[redirect_external] Blocked: ' . $url);
-        throw new RuntimeException('Invalid external redirect target.');
+        registry('log')->error('[redirect_external] Blocked host ' . ($host !== '' ? $host : '(none)'));
+        throw new RuntimeException(
+            'Invalid external redirect target' . ($host !== '' ? ' (' . $host . ')' : '') . '.'
+        );
     }
 
     if (!headers_sent()) {
         header('Location: ' . $url, true, $code);
     }
     exit;
+}
+
+/**
+ * Hosts we will send a browser to. OAuth consent only — not an open redirect.
+ */
+function external_redirect_host_allowed(string $host): bool
+{
+    $host = strtolower(trim($host));
+    static $exact = [
+        'auth.ebay.com',
+        'auth.sandbox.ebay.com',
+        'signin.ebay.com',
+        'signin.sandbox.ebay.com',
+        'accounts.shopify.com',
+        'www.shopify.com',
+        'sellercentral.amazon.com',
+        'sellercentral.amazon.ca',
+        'sellercentral.amazon.com.mx',
+        'sellercentral.amazon.co.uk',
+        'sellercentral.amazon.de',
+        'sellercentral.amazon.fr',
+        'sellercentral.amazon.it',
+        'sellercentral.amazon.es',
+        'sellercentral.amazon.nl',
+        'sellercentral.amazon.se',
+        'sellercentral.amazon.pl',
+        'sellercentral.amazon.com.be',
+        'sellercentral.amazon.ie',
+        'sellercentral.amazon.com.au',
+        'sellercentral.amazon.co.jp',
+        'sellercentral.amazon.sg',
+        'sellercentral.amazon.ae',
+        'sellercentral.amazon.in',
+        'sellercentral.amazon.com.br',
+        'sellercentral-europe.amazon.com',
+    ];
+
+    if (in_array($host, $exact, true)) {
+        return true;
+    }
+
+    return (bool) preg_match('/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/', $host);
 }
 
 function get_base_url(): string

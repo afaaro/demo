@@ -357,6 +357,10 @@ class DataTable {
     }
 
     private function renderHeader(string $key, string $label): string {
+        $column = $this->columns[$key] ?? null;
+        if (is_array($column) && isset($column['header_html']) && is_string($column['header_html'])) {
+            return $column['header_html'];
+        }
         $labelHtml = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
         if (!in_array($key, $this->sortable, true)) {
             return $labelHtml;

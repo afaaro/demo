@@ -131,7 +131,7 @@ class StoreAdminOrders extends Controller
 
         $dataset = (new Dataset($this->registry))
             ->perPage(50)
-            ->searchPlaceholder('Search orders…')
+            ->searchPlaceholder('Search by Order Number, Channel Order Reference, Name, Postcode (min. 3 characters)')
             ->preserve($preserve)
             ->filter('channel_id', 'select', $channelOptions)
             ->filter('status', 'select', $statusOptions)
@@ -158,23 +158,42 @@ class StoreAdminOrders extends Controller
 
         $dataset->columns([
             'sel' => [
-                'label'  => '',
+                'label'       => '',
+                'header_html' => '<input type="checkbox" class="sf-orders-select-all" id="sf-orders-select-all"'
+                    . ' title="Select all orders on this page" aria-label="Select all orders on this page">',
                 'render' => static function (array $row): string {
                     $oid = (int) ($row['_row']['id'] ?? 0);
-                    return '<input type="checkbox" class="form-check-input sf-orders-row" name="ids[]" value="'
-                        . $oid . '" form="sf-orders-bulk">';
+                    return '<input type="checkbox" class="sf-orders-row" name="ids[]" value="'
+                        . $oid . '" form="sf-orders-bulk" aria-label="Select order ' . $oid . '">';
+                },
+            ],
+            'flags' => [
+                'label'  => 'Order Flags',
+                'render' => static function (array $row): string {
+                    $r = $row['_row'];
+                    $html = '';
+                    if (!empty($r['is_priority'])) {
+                        $html .= '<span class="sf-oflag sf-oflag-p" title="Priority">P</span>';
+                    }
+                    if (!empty($r['attention_required'])) {
+                        $html .= '<span class="sf-oflag sf-oflag-a" title="Attention">A</span>';
+                    }
+                    if (!empty($r['on_hold'])) {
+                        $html .= '<span class="sf-oflag sf-oflag-h" title="On hold">H</span>';
+                    }
+                    return $html !== '' ? $html : '';
                 },
             ],
             'order' => [
-                'label'  => 'Order',
+                'label'  => 'Order ID',
                 'render' => function (array $row) use ($e): string {
                     $r = $row['_row'];
                     $oid = (int) $r['id'];
-                    $tone = $this->orderStatusTone($r);
-                    return '<span class="sf-dot sf-dot-' . $e($tone) . '"></span>'
-                        . '<a class="sf-order-no" href="'
+                    $chan = trim((string) ($r['channel_label'] ?? $r['channel_name'] ?? ''));
+                    return '<a class="sf-order-no" href="'
                         . $e($this->url->to('store/admin/orders/view', ['id' => $oid])) . '">'
-                        . $e((string) $oid) . '</a>';
+                        . $e((string) $oid) . '</a>'
+                        . ($chan !== '' ? '<div class="sf-order-sub">' . $e($chan) . '</div>' : '');
                 },
             ],
             'channel' => [
@@ -205,7 +224,7 @@ class StoreAdminOrders extends Controller
             'skus' => [
                 'label'  => 'Product SKUs',
                 'render' => function (array $row) use ($productUrl): string {
-                    return '<span class="small">' . store_render_short_skus($row['_items'] ?? [], $productUrl) . '</span>';
+                    return '<span class="small sf-sku-lines">' . store_render_item_titles($row['_items'] ?? [], $productUrl) . '</span>';
                 },
             ],
             'tags' => [
@@ -312,22 +331,16 @@ class StoreAdminOrders extends Controller
                 'render' => function (array $row) use ($e): string {
                     $pwId = (int) ($row['_row']['pickwave_id'] ?? 0);
                     if ($pwId <= 0) {
-                        return '<span class="text-muted">—</span>';
+                        return '';
                     }
-                    return '<a href="' . $e($this->url->to('store/admin/pickwaves/view', ['id' => $pwId])) . '">'
+                    return '<a class="sf-order-no" href="' . $e($this->url->to('store/admin/pickwaves/view', ['id' => $pwId])) . '">'
                         . $pwId . '</a>';
                 },
             ],
             'status' => [
-                'label'  => 'Status',
+                'label'  => 'Order Status',
                 'render' => function (array $row) use ($e): string {
-                    $r = $row['_row'];
-                    $created = (string) ($r['created_at'] ?? '');
-                    $tone = $this->orderStatusTone($r);
-                    return '<div class="sf-status">'
-                        . '<span class="sf-status-when">' . $e($this->formatOrderWhen($created)) . '</span>'
-                        . '<span class="sf-pill sf-pill-' . $e($tone) . '">' . $e($this->orderStatusLabel($r)) . '</span>'
-                        . '</div>';
+                    return '<span class="text-nowrap">' . $e($this->orderStatusLabel($row['_row'])) . '</span>';
                 },
             ],
             'notes' => [
@@ -380,15 +393,21 @@ class StoreAdminOrders extends Controller
 body.admin-body:has(.sf-orders-page) .admin-main{background:#f3f4f6}
 body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-shadow:none;padding:1rem 1.15rem}
 .sf-orders-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
-.sf-orders-head h1{font-size:1.35rem;font-weight:650;margin:0;letter-spacing:-.02em}
+.sf-orders-head h1{font-size:1.2rem;font-weight:650;margin:0;color:#4a5b6b;display:flex;align-items:center;gap:.45rem}
 .sf-orders-tabs{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap}
 .sf-orders-tabs a{color:#6b7280;text-decoration:none;padding:.35rem .7rem;border-radius:999px;font-size:.84rem;font-weight:500}
 .sf-orders-tabs a:hover{background:#f3f4f6;color:#111827}
 .sf-orders-tabs a.is-on{background:#dbeafe;color:#1d4ed8}
-.sf-orders-create{background:#2563eb;border:0;color:#fff;border-radius:999px;padding:.45rem 1rem;font-weight:600;font-size:.875rem;text-decoration:none}
-.sf-orders-create:hover{background:#1d4ed8;color:#fff}
-.sf-orders-toolbar{background:#fff;border:1px solid #e5e7eb;border-radius:.75rem;padding:.55rem .85rem;margin-bottom:.75rem;display:flex;justify-content:space-between;gap:.75rem;flex-wrap:wrap;position:relative}
-.sf-col-chooser{display:none;flex-direction:column;width:18rem;max-width:calc(100vw - 1rem);background:#fff;border:1px solid #e5e7eb;border-radius:.5rem;box-shadow:0 12px 32px rgba(15,23,42,.18);padding:.75rem;z-index:1080;overflow:hidden}
+.sf-orders-create{background:#7ac143;border:0;color:#fff;border-radius:1rem;padding:.4rem 1rem;font-weight:650;font-size:.9rem;text-decoration:none}
+.sf-orders-create:hover{background:#69a838;color:#fff}
+.sf-orders-toolbar{background:#5f87a8;border:0;border-radius:.35rem;padding:.45rem .6rem;margin-bottom:0;display:flex;justify-content:space-between;gap:.75rem;flex-wrap:wrap;position:relative;color:#fff}
+.sf-orders-toolbar .form-select,.sf-orders-toolbar .btn{border-radius:1rem}
+.sf-orders-toolbar .btn-outline-secondary{background:#7fa3bf;border-color:transparent;color:#fff}
+.sf-orders-toolbar .btn-primary{background:#4f7394;border-color:transparent}
+.sf-orders-toolbar .text-muted,.sf-orders-toolbar .small{color:rgba(255,255,255,.9)!important}
+.sf-col-chooser{display:none;flex-direction:column;width:18rem;max-width:calc(100vw - 1rem);background:#fff;border:1px solid #e5e7eb;border-radius:.5rem;box-shadow:0 12px 32px rgba(15,23,42,.18);padding:.75rem;z-index:1080;overflow:hidden;color:#1f2937}
+.sf-col-chooser .small,.sf-col-chooser label{color:#1f2937!important}
+.sf-col-chooser .text-muted{color:#6b7280!important}
 .sf-col-chooser-list{flex:1 1 auto;min-height:0;overflow:auto;padding-right:.15rem}
 .sf-chan{display:inline-flex;align-items:center;gap:.45rem}
 .sf-chan-mark{width:1.35rem;height:1.35rem;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;font-weight:700;flex:none}
@@ -408,8 +427,16 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
 .sf-pill-wait{background:#fff7ed;color:#c2410c}
 .sf-pill-bad{background:#fef2f2;color:#b91c1c}
 .sf-pill-off{background:#f1f5f9;color:#475569}
-.sf-order-no{font-weight:600;color:#111827;text-decoration:none}
-.sf-order-no:hover{color:#2563eb}
+.sf-order-no{font-weight:600;color:#1a73c7;text-decoration:underline}
+.sf-order-no:hover{color:#0b5cab}
+.sf-order-sub{font-size:.72rem;color:#6b7280;font-weight:500}
+.sf-oflag{display:inline-flex;align-items:center;justify-content:center;width:1.15rem;height:1.15rem;border-radius:.2rem;font-size:.68rem;font-weight:700;color:#fff;margin:0 .12rem .12rem 0}
+.sf-oflag-p{background:#3c9d3c}
+.sf-oflag-a{background:#d64545}
+.sf-oflag-h{background:#d97706}
+.sf-orders-page th[data-col="sel"],.sf-orders-page td[data-col="sel"]{width:2rem;min-width:2rem;text-align:center;padding-left:.35rem;padding-right:.35rem;vertical-align:middle}
+.sf-orders-page .sf-orders-select-all,.sf-orders-page .sf-orders-row{appearance:auto;-webkit-appearance:checkbox;width:13px;height:13px;margin:0;vertical-align:middle;cursor:pointer;accent-color:#2563eb}
+.sf-sku-lines a{color:#1a73c7;text-decoration:underline}
 .sf-sku-link{color:#111827;text-decoration:none}
 .sf-sku-link:hover{color:#2563eb;text-decoration:underline}
 .sf-muted{color:#6b7280}
@@ -445,7 +472,7 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
             echo '<div class="sf-orders-page">';
             echo '<div class="sf-orders-head">';
             echo '<div class="d-flex align-items-center gap-3 flex-wrap">';
-            echo '<h1>Orders</h1>';
+            echo '<h1><i class="bi bi-basket3"></i> Orders</h1>';
             echo '<nav class="sf-orders-tabs">';
             echo '<a class="' . $tabOn('') . '" href="' . $e($tabUrl('')) . '">All</a>';
             echo '<a class="' . $tabOn('ready') . '" href="' . $e($tabUrl('ready')) . '">Ready to pick</a>';
@@ -453,7 +480,7 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
             echo '<a class="' . $tabOn('today') . '" href="' . $e($tabUrl('today')) . '">Placed today</a>';
             echo '<a class="' . $tabOn('unpaid') . '" href="' . $e($tabUrl('unpaid')) . '">Unpaid</a>';
             echo '</nav></div>';
-            echo '<a class="sf-orders-create" href="' . $e($this->url->to('store/admin/orders/new')) . '">Create order</a>';
+            echo '<a class="sf-orders-create" href="' . $e($this->url->to('store/admin/orders/new')) . '">+ New Order</a>';
             echo '</div>';
 
             echo '<form method="post" action="' . $e($this->url->to('store/admin/orders/sync'))
@@ -545,9 +572,8 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
                 echo '<option value="' . (int) $m['id'] . '">' . $e($label) . '</option>';
             }
             echo '</select>';
-            echo '<button type="button" class="btn btn-sm btn-outline-secondary" id="sf-orders-select-page">Select page</button>';
             echo '<button type="submit" class="btn btn-sm btn-primary" id="sf-orders-bulk-confirm" disabled>Confirm</button>';
-            echo '<span class="small text-muted" id="sf-orders-bulk-count">0 selected</span>';
+            echo '<span class="small text-muted" id="sf-orders-bulk-count">0 items selected.</span>';
             echo '</div>';
             echo '<div class="d-flex flex-wrap align-items-center gap-2">';
             echo '<select id="sf-orders-saved-filters" class="form-select form-select-sm"'
@@ -572,25 +598,26 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
             echo '</div>'; // right controls
 
             $colChooser = [
-                'order'       => ['label' => 'Order', 'default' => true, 'locked' => true],
+                'flags'       => ['label' => 'Order Flags', 'default' => true],
+                'order'       => ['label' => 'Order ID', 'default' => true, 'locked' => true],
                 'channel'     => ['label' => 'Channel', 'default' => true, 'locked' => true],
                 'channel_ref' => ['label' => 'Channel order details', 'default' => false],
                 'items'       => ['label' => 'Items', 'default' => false],
                 'skus'        => ['label' => 'Product SKUs', 'default' => true],
                 'tags'        => ['label' => 'Tags', 'default' => false],
-                'customer'    => ['label' => 'Customer', 'default' => true],
-                'address'     => ['label' => 'Shipping address', 'default' => true],
+                'customer'    => ['label' => 'Customer', 'default' => false],
+                'address'     => ['label' => 'Shipping address', 'default' => false],
                 'order_date'  => ['label' => 'Order Date', 'default' => true],
                 'postcode'    => ['label' => 'Postcode', 'default' => true],
                 'email'       => ['label' => 'Email Address', 'default' => true],
                 'total'       => ['label' => 'Total', 'default' => true],
-                'packaging'   => ['label' => 'Packaging', 'default' => false],
-                'packages'    => ['label' => 'Number of Packages', 'default' => false],
-                'shipping'    => ['label' => 'Shipping Method', 'default' => false],
-                'weight'      => ['label' => 'Order Weight', 'default' => false],
-                'pickwave'    => ['label' => 'Pickwave ID', 'default' => false],
-                'status'      => ['label' => 'Status', 'default' => true],
-                'notes'       => ['label' => 'Notes', 'default' => false],
+                'packaging'   => ['label' => 'Packaging', 'default' => true],
+                'packages'    => ['label' => 'Number of Packages', 'default' => true],
+                'shipping'    => ['label' => 'Shipping Method', 'default' => true],
+                'status'      => ['label' => 'Order Status', 'default' => true],
+                'weight'      => ['label' => 'Order Weight', 'default' => true],
+                'pickwave'    => ['label' => 'Pickwave ID', 'default' => true],
+                'notes'       => ['label' => 'Notes', 'default' => true],
             ];
             echo '<div id="sf-orders-col-panel" class="sf-col-chooser">';
             echo '<div class="fw-semibold small mb-2">Columns</div>';
@@ -626,7 +653,7 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
             echo <<<HTML
 <script>
 (function () {
-  const KEY = 'sf.orders.cols.v6';
+  const KEY = 'sf.orders.cols.v7';
   const defaults = {$defaultsJson};
   const locked = new Set({$lockedJson});
   const bulkForm = document.getElementById('sf-orders-bulk');
@@ -635,7 +662,6 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
   const countEl = document.getElementById('sf-orders-bulk-count');
   const packSel = document.getElementById('sf-orders-bulk-packaging');
   const shipSel = document.getElementById('sf-orders-bulk-shipping');
-  const selectPage = document.getElementById('sf-orders-select-page');
   const panel = document.getElementById('sf-orders-col-panel');
   const toggle = document.getElementById('sf-orders-col-toggle');
   const checks = () => Array.from(document.querySelectorAll('.sf-orders-col-check'));
@@ -677,7 +703,8 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
 
   function syncBulk() {
     const n = rowChecks().filter(c => c.checked).length;
-    if (countEl) countEl.textContent = n + ' selected';
+    if (countEl) countEl.textContent = n + ' item' + (n === 1 ? '' : 's') + ' selected.';
+    syncSelectAllRows();
     const action = bulkAction ? bulkAction.value : '';
     if (confirmBtn) confirmBtn.disabled = !action || (action !== 'export' && n === 0);
     if (packSel) packSel.classList.toggle('d-none', action !== 'alter_packaging');
@@ -721,6 +748,23 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
 
   apply(load());
   syncSelectAll();
+
+  const selectAllRows = document.getElementById('sf-orders-select-all');
+  function syncSelectAllRows() {
+    if (!selectAllRows) return;
+    const all = rowChecks();
+    const on = all.filter(c => c.checked).length;
+    selectAllRows.checked = all.length > 0 && on === all.length;
+    selectAllRows.indeterminate = on > 0 && on < all.length;
+  }
+  if (selectAllRows) {
+    selectAllRows.addEventListener('change', () => {
+      const on = selectAllRows.checked;
+      rowChecks().forEach(c => { c.checked = on; });
+      syncBulk();
+    });
+  }
+  syncSelectAllRows();
   if (toggle && panel) {
     toggle.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -749,14 +793,6 @@ body.admin-body:has(.sf-orders-page) .admin-main__inner{background:#f3f4f6;box-s
   }
 
   rowChecks().forEach(cb => cb.addEventListener('change', syncBulk));
-  if (selectPage) {
-    selectPage.addEventListener('click', () => {
-      const all = rowChecks();
-      const allOn = all.length > 0 && all.every(c => c.checked);
-      all.forEach(c => { c.checked = !allOn; });
-      syncBulk();
-    });
-  }
   if (bulkAction) bulkAction.addEventListener('change', syncBulk);
   if (bulkForm) {
     bulkForm.addEventListener('submit', function (e) {
@@ -887,13 +923,13 @@ HTML;
         }
 
         echo $this->view->inline(function () use ($channels) {
-            $this->view->assign('title', 'New Order');
+            $this->view->assign('title', 'MOTO (Phone Order)');
             $this->view->block('right_sidebar', 'Orders');
             $e = fn(string $s): string => $this->view->e($s);
 
             echo '<div class="mb-3"><a class="text-decoration-none small" href="'
                . $e($this->url->to('store/admin/orders')) . '">&larr; Orders</a></div>';
-            echo '<h1 class="h3 mb-4">New Order</h1>';
+            echo '<h1 class="h3 mb-4">MOTO (Phone Order Entry)</h1>';
             echo '<form method="post" class="card border-0 shadow-sm" style="max-width:32rem">'
                . '<div class="card-body">';
             echo $this->request->csrfField();
@@ -910,6 +946,95 @@ HTML;
             echo '<button type="submit" class="btn btn-success">Create order</button>';
             echo '</div></form>';
         });
+    }
+
+    public function importAction(): void
+    {
+        $channels = array_values(array_filter(
+            $this->channels->all(),
+            static fn($c) => $c->enabled
+        ));
+
+        if (!$this->request->isPost()) {
+            echo $this->view->inline(function () use ($channels) {
+                $this->view->assign('title', 'CSV Order Import');
+                $this->view->block('right_sidebar', 'Orders');
+                $e = fn(string $s): string => $this->view->e($s);
+
+                echo '<div class="sf-page"><div class="sf-head"><div><h1>CSV Order Import</h1>'
+                   . '<p>Create manual (MOTO) order shells from a CSV. Columns: channel_id, external_order_id.</p></div></div>';
+                echo '<form method="post" enctype="multipart/form-data" class="sf-card p-3" style="max-width:36rem">';
+                echo $this->request->csrfField();
+                echo '<div class="mb-3"><label class="form-label">Default channel</label>'
+                   . '<select name="channel_id" class="form-select" required>';
+                echo '<option value="">Select channel…</option>';
+                foreach ($channels as $c) {
+                    echo '<option value="' . (int) $c->id . '">' . $e($c->label) . '</option>';
+                }
+                echo '</select></div>';
+                echo '<div class="mb-3"><label class="form-label">CSV file</label>'
+                   . '<input type="file" name="csv" class="form-control" accept=".csv,text/csv" required>'
+                   . '<div class="form-text">Header row required. Max 5 MB.</div></div>';
+                echo '<button type="submit" class="sf-btn is-primary">Import</button> ';
+                echo '<a class="sf-btn" href="' . $e($this->url->to('store/admin/orders')) . '">Cancel</a>';
+                echo '</form></div>';
+            });
+            return;
+        }
+
+        try {
+            $this->request->checkToken();
+            $defaultChannel = (int) $this->request->post('channel_id', 'int', 0);
+            $file = $this->request->file('csv');
+            if ($file === null || empty($file['tmp_name'])) {
+                throw new \RuntimeException('Please choose a CSV file.');
+            }
+            if ((int) ($file['size'] ?? 0) > 5 * 1024 * 1024) {
+                throw new \RuntimeException('CSV must be under 5 MB.');
+            }
+            $fh = fopen((string) $file['tmp_name'], 'r');
+            if ($fh === false) {
+                throw new \RuntimeException('Unable to read upload.');
+            }
+            $header = fgetcsv($fh);
+            if (!is_array($header) || $header === []) {
+                fclose($fh);
+                throw new \RuntimeException('CSV is empty.');
+            }
+            $map = [];
+            foreach ($header as $i => $col) {
+                $map[strtolower(trim((string) $col))] = (int) $i;
+            }
+            $created = 0;
+            $errors = 0;
+            while (($row = fgetcsv($fh)) !== false) {
+                if (!is_array($row) || $row === [] || (count($row) === 1 && trim((string) $row[0]) === '')) {
+                    continue;
+                }
+                $channelId = $defaultChannel;
+                if (isset($map['channel_id']) && isset($row[$map['channel_id']])) {
+                    $channelId = (int) $row[$map['channel_id']];
+                }
+                $ref = '';
+                foreach (['external_order_id', 'order_reference', 'reference'] as $key) {
+                    if (isset($map[$key], $row[$map[$key]])) {
+                        $ref = trim((string) $row[$map[$key]]);
+                        break;
+                    }
+                }
+                try {
+                    $this->orders->createManual($channelId, $ref);
+                    $created++;
+                } catch (\Throwable) {
+                    $errors++;
+                }
+            }
+            fclose($fh);
+            $this->notify->success("Imported {$created} order(s)" . ($errors > 0 ? ", {$errors} failed." : '.'));
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/orders/import');
     }
 
     public function bulkAction(): void
@@ -1013,18 +1138,18 @@ HTML;
             return 'Cancelled';
         }
         if ($status === 'FULFILLED') {
-            return 'Complete [Despatched]';
+            return 'Despatched';
         }
         if ($status === 'IN_PROGRESS') {
-            return 'In progress';
+            return 'In Progress';
         }
         if (empty($row['is_paid'])) {
             return 'Awaiting Payment';
         }
         if (!empty($row['pre_despatched'])) {
-            return 'Complete [Pre-Despatched]';
+            return 'Pre-Despatched';
         }
-        return 'Complete [Ready To Pick]';
+        return 'Ready To Pick';
     }
 
     // =========================================================================

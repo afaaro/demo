@@ -57,214 +57,585 @@ class StoreAdminPurchaseOrders extends Controller
 
     public function indexAction(): void
     {
+        $pageSize = (int) $this->request->get('page_size', 'int', 100);
+        if (!in_array($pageSize, [50, 100, 500], true)) {
+            $pageSize = 100;
+        }
         $filters = [
-            'id'          => trim((string) $this->request->get('id', 'string', '')),
-            'supplier'    => trim((string) $this->request->get('supplier', 'string', '')),
-            'warehouse'   => trim((string) $this->request->get('warehouse', 'string', '')),
-            'status'      => trim((string) $this->request->get('status', 'string', '')),
-            'raised_from' => trim((string) $this->request->get('raised_from', 'string', '')),
-            'raised_to'   => trim((string) $this->request->get('raised_to', 'string', '')),
-            'due_from'    => trim((string) $this->request->get('due_from', 'string', '')),
-            'due_to'      => trim((string) $this->request->get('due_to', 'string', '')),
-            'lines_q'     => trim((string) $this->request->get('lines_q', 'string', '')),
+            'id'            => trim((string) $this->request->get('id', 'string', '')),
+            'supplier'      => trim((string) $this->request->get('supplier', 'string', '')),
+            'warehouse'     => trim((string) $this->request->get('warehouse', 'string', '')),
+            'status'        => trim((string) $this->request->get('status', 'string', '')),
+            'raised_by'     => trim((string) $this->request->get('raised_by', 'string', '')),
+            'mode'          => trim((string) $this->request->get('mode', 'string', '')),
+            'sku'           => trim((string) $this->request->get('sku', 'string', '')),
+            'raised_from'   => trim((string) $this->request->get('raised_from', 'string', '')),
+            'raised_to'     => trim((string) $this->request->get('raised_to', 'string', '')),
+            'due_from'      => trim((string) $this->request->get('due_from', 'string', '')),
+            'due_to'        => trim((string) $this->request->get('due_to', 'string', '')),
+            'lines_q'       => trim((string) $this->request->get('lines_q', 'string', '')),
+            'show_archived' => (int) $this->request->get('show_archived', 'int', 0) === 1,
         ];
-        $rows = $this->orders->search($filters);
+        $total = $this->orders->count($filters);
+        $pages = max(1, (int) ceil($total / $pageSize));
+        $page = min($pages, max(1, (int) $this->request->get('page', 'int', 1)));
+        $rows = $this->orders->search($filters, $pageSize, ($page - 1) * $pageSize);
+        $skuMap = $this->orders->lineSkuMap(array_map(static fn(array $row): int => (int) $row['id'], $rows));
         $supplierList = $this->suppliers->all();
         $this->warehouses->ensure('Default');
         $warehouseList = $this->warehouses->all();
+        $raisedByList = $this->orders->raisedByOptions();
 
-        echo $this->view->inline(function () use ($rows, $filters, $supplierList, $warehouseList) {
-            $this->view->assign('title', 'Deliveries');
-            $this->view->block('right_sidebar', 'Deliveries');
-            $e = fn(string|int|float $s): string => $this->view->e((string) $s);
-            $fmtDate = static function (?string $dt): string {
-                $dt = trim((string) $dt);
-                if ($dt === '') {
-                    return '—';
+        echo $this->view->inline(function () use (
+            $rows, $filters, $supplierList, $warehouseList, $raisedByList, $skuMap, $total, $pages, $page, $pageSize
+        ) {
+            $this->renderPoIndex(
+                $rows, $filters, $supplierList, $warehouseList, $raisedByList, $skuMap, $total, $pages, $page, $pageSize
+            );
+        });
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @param array<string, mixed> $filters
+     * @param list<array<string, mixed>> $supplierList
+     * @param list<array<string, mixed>> $warehouseList
+     * @param list<string> $raisedByList
+     * @param array<int, list<array{sku: string, supplier_sku: string, product_id: int}>> $skuMap
+     */
+    private function renderPoIndex(
+        array $rows,
+        array $filters,
+        array $supplierList,
+        array $warehouseList,
+        array $raisedByList,
+        array $skuMap,
+        int $total,
+        int $pages,
+        int $page,
+        int $pageSize,
+    ): void {
+        $this->view->assign('title', 'Purchase Orders');
+        $this->view->block('right_sidebar', 'Purchase Orders');
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+        $fmtDate = static function (?string $dt): string {
+            $dt = trim((string) $dt);
+            if ($dt === '') {
+                return '';
+            }
+            try {
+                return (new \DateTimeImmutable($dt))->format('d/m/Y');
+            } catch (\Throwable) {
+                return $dt;
+            }
+        };
+        $listUrl = $this->url->to('store/admin/purchase-orders');
+        $qs = static function (array $extra = []) use ($filters, $pageSize): string {
+            $q = [
+                'id' => (string) $filters['id'],
+                'supplier' => (string) $filters['supplier'],
+                'warehouse' => (string) $filters['warehouse'],
+                'status' => (string) $filters['status'],
+                'raised_by' => (string) $filters['raised_by'],
+                'mode' => (string) $filters['mode'],
+                'sku' => (string) $filters['sku'],
+                'raised_from' => (string) $filters['raised_from'],
+                'raised_to' => (string) $filters['raised_to'],
+                'due_from' => (string) $filters['due_from'],
+                'due_to' => (string) $filters['due_to'],
+                'lines_q' => (string) $filters['lines_q'],
+                'page_size' => (string) $pageSize,
+            ];
+            if (!empty($filters['show_archived'])) {
+                $q['show_archived'] = '1';
+            }
+            foreach ($extra as $key => $value) {
+                $q[$key] = (string) $value;
+            }
+            return http_build_query(array_filter($q, static fn(string $v): bool => $v !== ''));
+        };
+        $fromItem = $total === 0 ? 0 : (($page - 1) * $pageSize) + 1;
+        $toItem = min($total, $page * $pageSize);
+
+        echo '<style>
+          .sf-po-page{display:grid;grid-template-columns:150px minmax(0,1fr);gap:1rem;align-items:start}
+          @media (max-width:991.98px){.sf-po-page{grid-template-columns:1fr}}
+          .sf-po-rail{position:sticky;top:calc(var(--admin-topbar-h, 56px) + .75rem);align-self:start}
+          .sf-po-rail-brand{display:flex;align-items:center;gap:.4rem;font-weight:600;margin-bottom:.75rem;color:#5b7c99}
+          .sf-po-rail-link{display:block;font-size:.8rem;padding:.4rem .55rem;border-radius:.25rem;color:#333;text-decoration:none}
+          .sf-po-rail-link.is-active{background:#fff;border:1px solid #cfd8e3;font-weight:600}
+          .sf-po-head{display:flex;justify-content:space-between;align-items:center;gap:.75rem;margin-bottom:.75rem}
+          .sf-po-head h1{font-size:1.2rem;margin:0;color:#4a5b6b;font-weight:600}
+          .sf-po-new{background:#7ac143;color:#fff;border:0;border-radius:1rem;padding:.4rem 1rem;font-weight:650;font-size:.9rem}
+          .sf-po-new:hover{background:#69a838;color:#fff}
+          .sf-po-bar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;background:#5f87a8;color:#fff;border-radius:.35rem .35rem 0 0;padding:.45rem .6rem}
+          .sf-po-bar button,.sf-po-bar a.sf-po-bar-btn{background:#7fa3bf;color:#fff;border:0;border-radius:1rem;padding:.22rem .7rem;font-size:.78rem;text-decoration:none}
+          .sf-po-bar button:disabled{opacity:.45}
+          .sf-po-bar .ms-auto{margin-left:auto;display:flex;gap:.4rem;align-items:center}
+          .sf-po-bar .form-check-label{font-size:.78rem}
+          .sf-po-table{font-size:.78rem}
+          .sf-po-table th{vertical-align:top;white-space:nowrap;font-weight:600}
+          .sf-po-table .form-control,.sf-po-table .form-select{font-size:.72rem;min-width:4.5rem}
+          .sf-po-ref,.sf-po-sku,.sf-po-view{color:#1a73c7;text-decoration:underline}
+          .sf-po-paid{color:#3c9d3c;font-size:1rem}
+          .sf-po-foot{display:flex;justify-content:space-between;align-items:center;gap:.75rem;background:#f3f4f6;border:1px solid #e5e7eb;border-top:0;padding:.4rem .7rem;font-size:.78rem}
+          .sf-po-adhoc{margin-bottom:.75rem}
+        </style>';
+
+        echo '<div class="sf-po-page">';
+        echo '<aside class="sf-po-rail">';
+        echo '<div class="sf-po-rail-brand"><i class="bi bi-box-seam"></i><span>P.Os</span></div>';
+        echo '<span class="sf-po-rail-link is-active">Purchase Orders</span>';
+        echo '<a class="sf-po-rail-link" href="' . $e($this->url->to('store/admin/inventory/planner')) . '">Requisitions</a>';
+        echo '</aside>';
+
+        echo '<div class="sf-po-main">';
+        echo '<form id="sf-po-full" method="post" action="' . $e($this->url->to('store/admin/purchase-orders/add')) . '" class="d-none">'
+           . $this->request->csrfField() . '</form>';
+        echo '<div class="sf-po-head"><h1>Purchase Orders</h1>';
+        echo '<button type="submit" form="sf-po-full" class="sf-po-new">+ New Purchase Order</button></div>';
+
+        echo '<details class="sf-po-adhoc"><summary class="small text-muted mb-2">Ad-hoc delivery</summary>';
+        echo '<form method="post" action="' . $e($this->url->to('store/admin/purchase-orders/ad-hoc')) . '" class="row g-2 align-items-end mb-3">';
+        echo $this->request->csrfField();
+        echo '<div class="col-md-6"><input type="text" class="form-control form-control-sm" name="code" placeholder="Product SKU / EAN / UPC" required></div>';
+        echo '<div class="col-md-2"><input type="number" class="form-control form-control-sm" name="qty" min="1" value="1" required></div>';
+        echo '<div class="col-md-2"><button type="submit" class="btn btn-sm btn-outline-secondary">Add</button></div>';
+        echo '</form></details>';
+
+        echo '<form id="sf-po-filters" method="get" action="' . $e($listUrl) . '">';
+        echo '<input type="hidden" name="route" value="store/admin/purchase-orders">';
+        echo '<input type="hidden" name="page" value="1">';
+        echo '</form>';
+        echo '<form id="sf-po-bulk" method="post" action="' . $e($this->url->to('store/admin/purchase-orders/bulk')) . '">';
+        echo $this->request->csrfField();
+        echo '<input type="hidden" name="bulk_action" id="sf-po-bulk-action" value="">';
+
+        echo '<div class="sf-po-bar">';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="delete" disabled>Delete</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="export" disabled>Export</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="paid" disabled>Set as Paid</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="unpaid" disabled>Set as Unpaid</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="archive" disabled>Set as Archived</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" data-bulk="unarchive" disabled>Set as Unarchived</button>';
+        echo '<button type="button" class="sf-po-bar-btn" id="sf-po-paperwork" disabled>View Paperwork</button>';
+        echo '<button type="submit" class="sf-po-bar-btn" formaction="'
+           . $e($this->url->to('store/admin/purchase-orders/book-in-bulk')) . '" disabled>Book in Outstanding</button>';
+        echo '<span class="small" id="sf-po-selected">0 items selected</span>';
+        echo '<div class="ms-auto">';
+        echo '<label class="form-check-label me-2"><input class="form-check-input" type="checkbox" name="show_archived" value="1" form="sf-po-filters"'
+           . (!empty($filters['show_archived']) ? ' checked' : '') . ' onchange="this.form.submit()"> Show archived</label>';
+        echo '<a class="sf-po-bar-btn" href="' . $e($listUrl) . '">Reset filters</a>';
+        echo '</div></div>';
+
+        echo '<div class="table-responsive border bg-white">';
+        echo '<table class="table table-sm table-hover align-middle mb-0 sf-po-table">';
+        echo '<thead class="table-light"><tr>';
+        echo '<th style="width:2rem"><input type="checkbox" class="form-check-input" id="sf-po-all"></th>';
+        $th = static function (string $label, string $control) use ($e): string {
+            return '<th>' . $e($label) . '<br>' . $control . '</th>';
+        };
+        echo $th('Purchase Order Reference', '<input class="form-control form-control-sm mt-1" name="id" form="sf-po-filters" value="' . $e((string) $filters['id']) . '">');
+        echo '<th>Warehouse<br><select class="form-select form-select-sm mt-1" name="warehouse" form="sf-po-filters" onchange="this.form.submit()"><option value="">All</option>';
+        foreach ($warehouseList as $w) {
+            $sel = $filters['warehouse'] === $w['name'] ? ' selected' : '';
+            echo '<option value="' . $e($w['name']) . '"' . $sel . '>' . $e($w['name']) . '</option>';
+        }
+        echo '</select></th>';
+        echo '<th>Supplier<br><select class="form-select form-select-sm mt-1" name="supplier" form="sf-po-filters" onchange="this.form.submit()"><option value="">All</option>';
+        foreach ($supplierList as $s) {
+            $sel = $filters['supplier'] === $s['name'] ? ' selected' : '';
+            echo '<option value="' . $e($s['name']) . '"' . $sel . '>' . $e($s['name']) . '</option>';
+        }
+        echo '</select></th>';
+        echo '<th>Purchase Order Mode<br><select class="form-select form-select-sm mt-1" name="mode" form="sf-po-filters" onchange="this.form.submit()"><option value="">All</option>';
+        foreach (['Manual' => 'Manual', 'Ad-hoc' => 'Ad-hoc'] as $val => $label) {
+            $sel = $filters['mode'] === $val ? ' selected' : '';
+            echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
+        }
+        echo '</select></th>';
+        echo '<th>Raised By<br><select class="form-select form-select-sm mt-1" name="raised_by" form="sf-po-filters" onchange="this.form.submit()"><option value="">All</option>';
+        foreach ($raisedByList as $name) {
+            $sel = $filters['raised_by'] === $name ? ' selected' : '';
+            echo '<option value="' . $e($name) . '"' . $sel . '>' . $e($name) . '</option>';
+        }
+        echo '</select></th>';
+        echo $th('Date Raised', '<input type="date" class="form-control form-control-sm mt-1" name="raised_from" form="sf-po-filters" value="' . $e((string) $filters['raised_from']) . '">');
+        echo $th('Due Date', '<input type="date" class="form-control form-control-sm mt-1" name="due_from" form="sf-po-filters" value="' . $e((string) $filters['due_from']) . '">');
+        echo '<th>Status<br><select class="form-select form-select-sm mt-1" name="status" form="sf-po-filters" onchange="this.form.submit()"><option value="">All</option>';
+        foreach ([
+            'draft' => 'Draft',
+            'confirmed' => 'Sent to Supplier',
+            'received' => 'Booked In',
+            'cancelled' => 'Cancelled',
+        ] as $val => $label) {
+            $sel = $filters['status'] === $val ? ' selected' : '';
+            echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
+        }
+        echo '</select></th>';
+        echo $th('Product SKUs', '<input class="form-control form-control-sm mt-1" name="sku" form="sf-po-filters" value="' . $e((string) $filters['sku']) . '">');
+        echo '<th>Supplier SKUs</th>';
+        echo $th('Total Lines', '<input class="form-control form-control-sm mt-1" name="lines_q" form="sf-po-filters" value="' . $e((string) $filters['lines_q']) . '">');
+        echo '<th class="text-end">Total Cartons</th><th class="text-end">Total Units</th><th class="text-end">Total Inventory</th><th class="text-end">Total Value</th>';
+        echo '<th>Paid</th><th>Paid On</th><th>Payment Reference</th><th>View Paperwork</th>';
+        echo '</tr></thead><tbody>';
+
+        if ($rows === []) {
+            echo '<tr><td colspan="19" class="text-muted text-center py-4">No purchase orders match these filters.</td></tr>';
+        }
+        foreach ($rows as $row) {
+            $id = (int) $row['id'];
+            $viewUrl = $this->url->to('store/admin/purchase-orders/view', ['id' => $id]);
+            $sheetUrl = $this->url->to('store/admin/purchase-orders/booking-sheet', ['id' => $id]);
+            $ref = trim((string) ($row['reference'] ?? ''));
+            if ($ref === '') {
+                $ref = (string) $id;
+            }
+            $lines = $skuMap[$id] ?? [];
+            $skus = '';
+            $supplierSkus = '';
+            foreach ($lines as $line) {
+                $sku = trim($line['sku']);
+                if ($sku !== '') {
+                    if ((int) $line['product_id'] > 0) {
+                        $skus .= '<a class="sf-po-sku" href="'
+                           . $e($this->url->to('store/admin/products/edit', ['id' => (int) $line['product_id']]))
+                           . '">' . $e($sku) . '</a><br>';
+                    } else {
+                        $skus .= $e($sku) . '<br>';
+                    }
+                }
+                $ss = trim($line['supplier_sku']);
+                if ($ss !== '') {
+                    $supplierSkus .= $e($ss) . '<br>';
+                }
+            }
+            $paidOn = trim((string) ($row['paid_on'] ?? ''));
+            $mode = trim((string) ($row['created_via'] ?? ''));
+            if (strcasecmp($mode, 'Manual') === 0) {
+                $mode = '';
+            }
+            $lineCount = (int) ($row['line_count'] ?? 0);
+            $units = (int) ($row['units_ordered'] ?? 0);
+            echo '<tr>';
+            echo '<td><input type="checkbox" class="form-check-input sf-po-check" name="ids[]" value="'
+               . $id . '" data-sheet="' . $e($sheetUrl) . '"></td>';
+            echo '<td><a class="sf-po-ref" href="' . $e($viewUrl) . '">' . $e($ref) . '</a></td>';
+            echo '<td>' . $e((string) ($row['warehouse'] ?? '')) . '</td>';
+            echo '<td>' . $e((string) ($row['supplier_name'] ?? '')) . '</td>';
+            echo '<td>' . $e($mode) . '</td>';
+            echo '<td>' . $e((string) ($row['raised_by'] ?? '')) . '</td>';
+            echo '<td class="text-nowrap">' . $e($fmtDate((string) ($row['created_at'] ?? ''))) . '</td>';
+            echo '<td class="text-nowrap">' . $e($fmtDate((string) ($row['expected_date'] ?? ''))) . '</td>';
+            echo '<td>' . $e(PurchaseOrderRepository::statusLabel((string) ($row['status'] ?? '')));
+            if (!empty($row['archived'])) {
+                echo '<div class="text-muted">Archived</div>';
+            }
+            echo '</td>';
+            echo '<td>' . $skus . '</td>';
+            echo '<td>' . $supplierSkus . '</td>';
+            echo '<td class="text-end">' . $lineCount . '</td>';
+            echo '<td class="text-end">' . $lineCount . '</td>';
+            echo '<td class="text-end">' . $units . '</td>';
+            echo '<td class="text-end">' . $units . '</td>';
+            echo '<td class="text-end">£' . number_format((float) ($row['total_value'] ?? 0), 2) . '</td>';
+            echo '<td class="text-center">' . ($paidOn !== '' ? '<i class="bi bi-check-lg sf-po-paid"></i>' : '') . '</td>';
+            echo '<td class="text-nowrap">' . $e($fmtDate($paidOn)) . '</td>';
+            echo '<td>' . $e((string) ($row['payment_reference'] ?? '')) . '</td>';
+            echo '<td><a class="sf-po-view" href="' . $e($viewUrl) . '">View Purchase Order</a></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div></form>';
+
+        echo '<div class="sf-po-foot">';
+        echo '<div>Page Size <select class="form-select form-select-sm d-inline-block" style="width:auto" name="page_size" form="sf-po-filters" onchange="this.form.submit()">';
+        foreach ([50, 100, 500] as $size) {
+            echo '<option value="' . $size . '"' . ($pageSize === $size ? ' selected' : '') . '>' . $size . '</option>';
+        }
+        echo '</select></div>';
+        echo '<div>';
+        if ($page > 1) {
+            echo '<a href="' . $e($listUrl . '?' . $qs(['page' => $page - 1])) . '">Prev</a> ';
+        }
+        echo 'Page ' . $page . ' of ' . $pages . ' · Items ' . $fromItem . ' to ' . $toItem . ' of ' . $total;
+        if ($page < $pages) {
+            echo ' <a href="' . $e($listUrl . '?' . $qs(['page' => $page + 1])) . '">Next</a>';
+        }
+        echo '</div></div>';
+        echo '</div></div>';
+
+        $this->view->block('scripts', <<<'JS'
+        <script>
+        (function () {
+          const all = document.getElementById('sf-po-all');
+          const form = document.getElementById('sf-po-bulk');
+          const action = document.getElementById('sf-po-bulk-action');
+          const selected = document.getElementById('sf-po-selected');
+          const paperwork = document.getElementById('sf-po-paperwork');
+          const checks = () => Array.from(document.querySelectorAll('.sf-po-check'));
+          function sync() {
+            const on = checks().filter(c => c.checked);
+            if (selected) selected.textContent = on.length + ' item' + (on.length === 1 ? '' : 's') + ' selected';
+            document.querySelectorAll('#sf-po-bulk .sf-po-bar button').forEach(function (btn) {
+              if (btn.id === 'sf-po-paperwork') return;
+              btn.disabled = on.length === 0;
+            });
+            if (paperwork) paperwork.disabled = on.length !== 1;
+          }
+          if (all) all.addEventListener('change', function () {
+            checks().forEach(c => { c.checked = all.checked; });
+            sync();
+          });
+          document.addEventListener('change', function (e) {
+            if (e.target.classList && e.target.classList.contains('sf-po-check')) sync();
+          });
+          document.querySelectorAll('[data-bulk]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              if (action) action.value = btn.getAttribute('data-bulk') || '';
+            });
+          });
+          if (form) form.addEventListener('submit', function (e) {
+            const submitter = e.submitter;
+            if (submitter && submitter.getAttribute('data-bulk') === 'delete') {
+              if (!confirm('Delete the selected purchase orders? Only drafts and cancelled orders can be deleted.')) {
+                e.preventDefault();
+              }
+            }
+          });
+          if (paperwork) paperwork.addEventListener('click', function () {
+            const on = checks().filter(c => c.checked);
+            if (on.length === 1) window.location = on[0].getAttribute('data-sheet');
+          });
+          const filterForm = document.getElementById('sf-po-filters');
+          if (filterForm) {
+            filterForm.querySelectorAll('input[type="text"], input[type="date"]').forEach(function (el) {
+              el.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter') { ev.preventDefault(); filterForm.submit(); }
+              });
+              if (el.type === 'date') el.addEventListener('change', function () { filterForm.submit(); });
+            });
+          }
+          sync();
+        })();
+        </script>
+        JS);
+    }
+
+    public function bulkAction(): void
+    {
+        if (!$this->request->isPost()) {
+            redirect_to('store/admin/purchase-orders');
+            return;
+        }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired. Please reload.');
+            redirect_to('store/admin/purchase-orders');
+            return;
+        }
+
+        $action = (string) $this->request->post('bulk_action', 'string', '');
+        $ids = array_values(array_filter(
+            array_map('intval', (array) $this->request->post('ids', 'raw', [])),
+            static fn(int $id): bool => $id > 0
+        ));
+        if ($ids === []) {
+            $this->notify->warning('Select at least one purchase order.');
+            redirect_to('store/admin/purchase-orders');
+            return;
+        }
+        if ($action === 'export') {
+            $this->exportPurchaseOrders($ids);
+            return;
+        }
+
+        $ok = 0;
+        $fail = 0;
+        foreach ($ids as $id) {
+            try {
+                match ($action) {
+                    'delete' => $this->orders->delete($id),
+                    'paid' => $this->orders->setPaid($id, date('Y-m-d')),
+                    'unpaid' => $this->orders->setPaid($id, null),
+                    'archive' => $this->orders->setArchived($id, true),
+                    'unarchive' => $this->orders->setArchived($id, false),
+                    default => throw new \RuntimeException('Unknown action.'),
+                };
+                $ok++;
+            } catch (\Throwable) {
+                $fail++;
+            }
+        }
+        if ($ok > 0) {
+            $this->notify->success($ok . ' purchase order(s) updated.');
+        }
+        if ($fail > 0) {
+            $this->notify->warning($fail . ' could not be updated.');
+        }
+        redirect_to('store/admin/purchase-orders');
+    }
+
+    /** @param list<int> $ids */
+    private function exportPurchaseOrders(array $ids): void
+    {
+        $rows = [];
+        foreach ($ids as $id) {
+            $po = $this->orders->find($id);
+            if ($po !== null) {
+                $rows[] = $po;
+            }
+        }
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="purchase-orders.csv"');
+        $out = fopen('php://output', 'w');
+        if ($out === false) {
+            return;
+        }
+        fputcsv($out, ['Reference', 'Warehouse', 'Supplier', 'Raised By', 'Date Raised', 'Due Date', 'Status', 'Paid On', 'Payment Reference']);
+        foreach ($rows as $row) {
+            fputcsv($out, [
+                (string) ($row['reference'] ?? $row['id']),
+                (string) ($row['warehouse'] ?? ''),
+                (string) ($row['supplier_name'] ?? ''),
+                (string) ($row['raised_by'] ?? ''),
+                (string) ($row['created_at'] ?? ''),
+                (string) ($row['expected_date'] ?? ''),
+                PurchaseOrderRepository::statusLabel((string) ($row['status'] ?? '')),
+                (string) ($row['paid_on'] ?? ''),
+                (string) ($row['payment_reference'] ?? ''),
+            ]);
+        }
+        fclose($out);
+    }
+
+    public function importAction(): void
+    {
+        if (!$this->request->isPost()) {
+            echo $this->view->inline(function () {
+                $this->view->assign('title', 'PO Import');
+                $this->view->block('right_sidebar', 'Purchase Orders');
+                $e = fn(string $s): string => $this->view->e($s);
+                echo '<div class="sf-page"><div class="sf-head"><div><h1>Purchase Order Import</h1>'
+                   . '<p>CSV columns: supplier, sku, qty, unit_cost, warehouse, reference, expected_date.</p></div></div>';
+                echo '<form method="post" enctype="multipart/form-data" class="sf-card p-3" style="max-width:36rem">';
+                echo $this->request->csrfField();
+                echo '<div class="mb-3"><label class="form-label">CSV file</label>'
+                   . '<input type="file" name="csv" class="form-control" accept=".csv,text/csv" required>'
+                   . '<div class="form-text">Rows with the same supplier + reference share one draft PO. Max 5 MB.</div></div>';
+                echo '<button type="submit" class="btn btn-success">Import</button> ';
+                echo '<a class="btn btn-outline-secondary" href="' . $e($this->url->to('store/admin/purchase-orders')) . '">Cancel</a>';
+                echo '</form></div>';
+            });
+            return;
+        }
+
+        try {
+            $this->request->checkToken();
+            $file = $this->request->file('csv');
+            if ($file === null || empty($file['tmp_name'])) {
+                throw new \RuntimeException('Please choose a CSV file.');
+            }
+            if ((int) ($file['size'] ?? 0) > 5 * 1024 * 1024) {
+                throw new \RuntimeException('CSV must be under 5 MB.');
+            }
+            $fh = fopen((string) $file['tmp_name'], 'r');
+            if ($fh === false) {
+                throw new \RuntimeException('Unable to read upload.');
+            }
+            $header = fgetcsv($fh);
+            if (!is_array($header) || $header === []) {
+                fclose($fh);
+                throw new \RuntimeException('CSV is empty.');
+            }
+            $map = [];
+            foreach ($header as $i => $col) {
+                $map[strtolower(trim((string) $col))] = (int) $i;
+            }
+            $raisedBy = method_exists($this, 'raisedByName') ? $this->raisedByName() : (string) ($this->auth->username() ?? '');
+            $poCache = [];
+            $lines = 0;
+            $errors = 0;
+            while (($row = fgetcsv($fh)) !== false) {
+                if (!is_array($row) || $row === []) {
+                    continue;
+                }
+                $get = static function (string $key) use ($map, $row): string {
+                    return isset($map[$key], $row[$map[$key]]) ? trim((string) $row[$map[$key]]) : '';
+                };
+                $supplier = $get('supplier') !== '' ? $get('supplier') : $get('supplier_name');
+                $sku = $get('sku');
+                $qty = (int) ($get('qty') !== '' ? $get('qty') : $get('qty_ordered'));
+                $unitCost = (float) ($get('unit_cost') !== '' ? $get('unit_cost') : $get('cost'));
+                $warehouse = $get('warehouse') !== '' ? $get('warehouse') : 'Default';
+                $reference = $get('reference');
+                $expected = $get('expected_date') !== '' ? $get('expected_date') : null;
+                if ($sku === '' || $qty <= 0) {
+                    $errors++;
+                    continue;
+                }
+                $variant = $this->variants->findBySku($sku);
+                if ($variant === null || $variant->id === null) {
+                    $errors++;
+                    continue;
+                }
+                $cacheKey = strtolower($supplier) . '|' . strtolower($reference) . '|' . strtolower($warehouse);
+                if (!isset($poCache[$cacheKey])) {
+                    $this->warehouses->ensure($warehouse);
+                    $poCache[$cacheKey] = $this->orders->create(
+                        $supplier,
+                        $reference,
+                        '',
+                        $expected,
+                        $warehouse,
+                        $raisedBy,
+                        0.0,
+                        20.0,
+                        ['created_via' => 'CSV Import']
+                    );
                 }
                 try {
-                    return (new \DateTimeImmutable($dt))->format('d/m/Y');
-                } catch (\Throwable $ex) {
-                    return $dt;
+                    $this->orders->addLine((int) $poCache[$cacheKey], (int) $variant->id, $qty, $unitCost, $sku);
+                    $lines++;
+                } catch (\Throwable) {
+                    $errors++;
                 }
-            };
-
-            echo '<style>
-              .sf-del-adhoc{background:#5b7c99;color:#fff;border-radius:.35rem;padding:.75rem 1rem;margin-bottom:1.25rem}
-              .sf-del-adhoc label{font-size:.75rem;margin-bottom:.15rem;opacity:.9}
-              .sf-del-toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
-              .sf-del-actions a{display:block;font-size:.8rem;line-height:1.35;white-space:nowrap}
-              .sf-del-table th{vertical-align:top;font-size:.8rem}
-              .sf-del-table .form-control,.sf-del-table .form-select{font-size:.8rem}
-            </style>';
-
-            // Ad-hoc create
-            echo '<div class="sf-del-adhoc">';
-            echo '<div class="fw-semibold mb-2">Create an Ad-Hoc Delivery / Purchase Order</div>';
-            echo '<form method="post" action="'
-               . $e($this->url->to('store/admin/purchase-orders/ad-hoc'))
-               . '" class="row g-2 align-items-end">';
-            echo $this->request->csrfField();
-            echo '<div class="col-md-6"><label class="form-label" for="adhoc_code">Product SKU / EAN / UPC</label>';
-            echo '<input type="text" class="form-control form-control-sm" name="code" id="adhoc_code" required'
-               . ' autocomplete="off"></div>';
-            echo '<div class="col-md-2"><label class="form-label" for="adhoc_qty">Quantity</label>';
-            echo '<input type="number" class="form-control form-control-sm" name="qty" id="adhoc_qty"'
-               . ' min="1" value="1" required></div>';
-            echo '<div class="col-md-2"><button type="submit" class="btn btn-sm btn-light w-100">Add</button></div>';
-            echo '<div class="col-md-2 text-end"><a class="btn btn-sm btn-outline-light" href="'
-               . $e($this->url->to('store/admin/purchase-orders/add'))
-               . '">Full PO</a></div>';
-            echo '</form></div>';
-
-            echo '<div class="sf-del-toolbar">';
-            echo '<div class="d-flex flex-wrap gap-2 align-items-center">';
-            echo '<h1 class="h4 mb-0 me-2">Deliveries</h1>';
-            echo '<button type="submit" form="sf-del-bulk" class="btn btn-sm btn-outline-primary"'
-               . ' id="sf-del-book-bulk" disabled>Book in Outstanding</button>';
-            echo '</div>';
-            echo '<div class="d-flex gap-2">';
-            echo '<a class="btn btn-sm btn-outline-secondary" href="'
-               . $e($this->url->to('store/admin/purchase-orders'))
-               . '">Clear filtering</a>';
-            echo '</div></div>';
-
-            echo '<form id="sf-del-filters" method="get" action="'
-               . $e($this->url->to('store/admin/purchase-orders')) . '"></form>';
-
-            echo '<form method="post" action="'
-               . $e($this->url->to('store/admin/purchase-orders/book-in-bulk'))
-               . '" id="sf-del-bulk">';
-            echo $this->request->csrfField();
-
-            echo '<div class="table-responsive border rounded bg-white">';
-            echo '<table class="table table-sm table-hover align-middle mb-0 sf-del-table">';
-            echo '<thead class="table-light"><tr>';
-            echo '<th style="width:2rem"><input type="checkbox" class="form-check-input" id="sf-del-all"></th>';
-            echo '<th>Purchase Order ID<br><input type="text" class="form-control form-control-sm mt-1"'
-               . ' name="id" form="sf-del-filters" value="' . $e($filters['id']) . '"></th>';
-            echo '<th>Supplier<br><select class="form-select form-select-sm mt-1" name="supplier"'
-               . ' form="sf-del-filters" onchange="this.form.submit()"><option value="">All</option>';
-            foreach ($supplierList as $s) {
-                $sel = $filters['supplier'] === $s['name'] ? ' selected' : '';
-                echo '<option value="' . $e($s['name']) . '"' . $sel . '>' . $e($s['name']) . '</option>';
             }
-            echo '</select></th>';
-            echo '<th>Warehouse<br><select class="form-select form-select-sm mt-1" name="warehouse"'
-               . ' form="sf-del-filters" onchange="this.form.submit()"><option value="">All</option>';
-            foreach ($warehouseList as $w) {
-                $sel = $filters['warehouse'] === $w['name'] ? ' selected' : '';
-                echo '<option value="' . $e($w['name']) . '"' . $sel . '>' . $e($w['name']) . '</option>';
-            }
-            echo '</select></th>';
-            echo '<th>Date Raised<br><div class="d-flex gap-1 mt-1">'
-               . '<input type="date" class="form-control form-control-sm" name="raised_from" form="sf-del-filters"'
-               . ' value="' . $e($filters['raised_from']) . '" title="From">'
-               . '<input type="date" class="form-control form-control-sm" name="raised_to" form="sf-del-filters"'
-               . ' value="' . $e($filters['raised_to']) . '" title="To"></div></th>';
-            echo '<th>Due Date<br><div class="d-flex gap-1 mt-1">'
-               . '<input type="date" class="form-control form-control-sm" name="due_from" form="sf-del-filters"'
-               . ' value="' . $e($filters['due_from']) . '" title="From">'
-               . '<input type="date" class="form-control form-control-sm" name="due_to" form="sf-del-filters"'
-               . ' value="' . $e($filters['due_to']) . '" title="To"></div></th>';
-            echo '<th>Status<br><select class="form-select form-select-sm mt-1" name="status"'
-               . ' form="sf-del-filters" onchange="this.form.submit()"><option value="">All</option>';
-            foreach ([
-                'draft' => 'Draft',
-                'confirmed' => 'Sent To Supplier',
-                'received' => 'Booked In',
-                'cancelled' => 'Cancelled',
-            ] as $val => $label) {
-                $sel = $filters['status'] === $val ? ' selected' : '';
-                echo '<option value="' . $e($val) . '"' . $sel . '>' . $e($label) . '</option>';
-            }
-            echo '</select></th>';
-            echo '<th class="text-end">Total Value</th>';
-            echo '<th>Total Lines / Cartons / Units / Inventory<br>'
-               . '<input type="text" class="form-control form-control-sm mt-1" name="lines_q"'
-               . ' form="sf-del-filters" value="' . $e($filters['lines_q'])
-               . '" placeholder="Lines ="></th>';
-            echo '<th></th>';
-            echo '</tr></thead><tbody>';
-
-            if ($rows === []) {
-                echo '<tr><td colspan="10" class="text-muted py-4 text-center">'
-                   . 'No deliveries match these filters.</td></tr>';
-            }
-
-            foreach ($rows as $row) {
-                $id = (int) $row['id'];
-                $st = (string) $row['status'];
-                $open = (int) ($row['open_qty'] ?? 0);
-                $lines = (int) ($row['line_count'] ?? 0);
-                $units = (int) ($row['units_ordered'] ?? 0);
-                $viewUrl = $this->url->to('store/admin/purchase-orders/view', ['id' => $id]);
-                $bookUrl = $this->url->to('store/admin/purchase-orders/book-delivery', ['id' => $id]);
-                $grUrl = $this->url->to('store/admin/purchase-orders/goods-received', ['id' => $id]);
-                $sheetUrl = $this->url->to('store/admin/purchase-orders/booking-sheet', ['id' => $id]);
-
-                echo '<tr>';
-                echo '<td><input type="checkbox" class="form-check-input sf-del-check" name="ids[]" value="'
-                   . $id . '"' . ($st === 'confirmed' && $open > 0 ? '' : ' disabled') . '></td>';
-                echo '<td><a href="' . $e($viewUrl) . '">' . $id . '</a></td>';
-                echo '<td>' . $e((string) $row['supplier_name']) . '</td>';
-                echo '<td>' . $e((string) ($row['warehouse'] ?? 'Default')) . '</td>';
-                echo '<td class="text-nowrap">' . $e($fmtDate((string) ($row['created_at'] ?? ''))) . '</td>';
-                echo '<td class="text-nowrap">' . $e($fmtDate((string) ($row['expected_date'] ?? ''))) . '</td>';
-                echo '<td>' . $e(PurchaseOrderRepository::statusLabel($st)) . '</td>';
-                echo '<td class="text-end">£' . number_format((float) ($row['total_value'] ?? 0), 2) . '</td>';
-                echo '<td>' . $lines . ' / ' . $units . ' / ' . $units . ' / ' . $units . '</td>';
-                echo '<td class="sf-del-actions">';
-                if ($st === 'confirmed' && $open > 0) {
-                    echo '<a href="' . $e($bookUrl) . '">Book In Outstanding</a>';
-                }
-                echo '<a href="' . $e($grUrl) . '">View Goods Received</a>';
-                echo '<a href="' . $e($sheetUrl) . '">View Suggested Booking In Sheet</a>';
-                echo '</td></tr>';
-            }
-
-            echo '</tbody></table></div></form>';
-
-            $this->view->block('scripts', <<<'JS'
-            <script>
-            (function () {
-                const all = document.getElementById('sf-del-all');
-                const checks = () => Array.from(document.querySelectorAll('.sf-del-check:not(:disabled)'));
-                const bulkBtn = document.getElementById('sf-del-book-bulk');
-                const filterForm = document.getElementById('sf-del-filters');
-                function sync() {
-                    const n = checks().filter(c => c.checked).length;
-                    if (bulkBtn) bulkBtn.disabled = n === 0;
-                }
-                if (all) {
-                    all.addEventListener('change', function () {
-                        checks().forEach(c => { c.checked = all.checked; });
-                        sync();
-                    });
-                }
-                document.addEventListener('change', function (e) {
-                    if (e.target.classList && e.target.classList.contains('sf-del-check')) sync();
-                });
-                if (filterForm) {
-                    filterForm.querySelectorAll('input[type="text"], input[type="date"]').forEach(function (el) {
-                        el.addEventListener('keydown', function (ev) {
-                            if (ev.key === 'Enter') { ev.preventDefault(); filterForm.submit(); }
-                        });
-                        if (el.type === 'date') {
-                            el.addEventListener('change', function () { filterForm.submit(); });
-                        }
-                    });
-                }
-                sync();
-            })();
-            </script>
-            JS);
-        });
+            fclose($fh);
+            $this->notify->success(
+                'Imported ' . count($poCache) . ' PO(s), ' . $lines . ' line(s)'
+                . ($errors > 0 ? ", {$errors} row(s) skipped." : '.')
+            );
+        } catch (\Throwable $e) {
+            $this->notify->error($e->getMessage());
+        }
+        redirect_to('store/admin/purchase-orders/import');
     }
 
     public function addAction(): void
     {
+        $purpose = strtolower(trim(
+            (string) ($this->request->header('Sec-Purpose')
+                ?? $this->request->header('Purpose')
+                ?? '')
+        ));
+        $prefetch = str_contains($purpose, 'prefetch') || str_contains($purpose, 'preview');
+
         try {
+            if ($this->request->isPost()) {
+                $this->request->checkToken();
+            }
+            $raisedBy = $this->raisedByName();
+            $existing = $this->orders->findReusableManualDraft($raisedBy);
+            if ($existing !== null) {
+                redirect_to('store/admin/purchase-orders/view', ['id' => (int) $existing['id']]);
+                return;
+            }
+            if ($prefetch) {
+                redirect_to('store/admin/purchase-orders');
+                return;
+            }
+
             $this->warehouses->ensure('Default');
             $warehouseName = 'Default';
             $wh = $this->warehouses->findByName($warehouseName);
@@ -276,7 +647,7 @@ class StoreAdminPurchaseOrders extends Controller
                 '',
                 null,
                 $warehouseName,
-                $this->raisedByName(),
+                $raisedBy,
                 0.0,
                 20.0,
                 [
@@ -372,11 +743,17 @@ class StoreAdminPurchaseOrders extends Controller
             $openTotal += PurchaseOrderRepository::lineOutstanding($line);
         }
         $pq = trim((string) $this->request->get('pq', 'string', ''));
-        $catalogSupplier = $isDraft ? (string) ($po['supplier_name'] ?? '') : '';
-        $catalog = $isDraft ? $this->orders->catalogVariants($pq, $catalogSupplier) : [];
+        $savedSupplier = $isDraft ? trim((string) ($po['supplier_name'] ?? '')) : '';
+        $requestedSupplier = $isDraft
+            ? $this->canonicalSupplierName(trim((string) $this->request->get('supplier', 'string', '')))
+            : '';
+        $catalogSupplier = $requestedSupplier !== '' ? $requestedSupplier : $savedSupplier;
+        $catalog = $isDraft
+            ? $this->orders->catalogVariants($pq, $catalogSupplier, $catalogSupplier !== '' ? 200 : 80)
+            : [];
 
         echo $this->view->inline(function () use (
-            $po, $lines, $money, $supplierList, $warehouseList, $isDraft, $isConfirmed, $openTotal, $catalog, $pq
+            $po, $lines, $money, $supplierList, $warehouseList, $isDraft, $isConfirmed, $openTotal, $catalog, $pq, $catalogSupplier
         ) {
             $this->renderPoScreen(
                 $po,
@@ -388,7 +765,8 @@ class StoreAdminPurchaseOrders extends Controller
                 $isConfirmed,
                 $openTotal,
                 $catalog,
-                $pq
+                $pq,
+                $catalogSupplier
             );
         });
     }
@@ -423,6 +801,24 @@ class StoreAdminPurchaseOrders extends Controller
             $this->notify->error($ex->getMessage());
         }
         redirect_to('store/admin/purchase-orders/view', ['id' => $id]);
+    }
+
+    public function catalogAction(): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        $id = (int) $this->request->get('id', 'int', 0);
+        $po = $this->orders->find($id);
+        if ($po === null || (string) ($po['status'] ?? '') !== PurchaseOrderRepository::STATUS_DRAFT) {
+            echo json_encode(['ok' => false, 'html' => '']);
+            return;
+        }
+        $pq = trim((string) $this->request->get('pq', 'string', ''));
+        $supplier = $this->canonicalSupplierName(trim((string) $this->request->get('supplier', 'string', '')));
+        $rows = $this->orders->catalogVariants($pq, $supplier, $supplier !== '' ? 200 : 80);
+        echo json_encode([
+            'ok'   => true,
+            'html' => $this->catalogBodyHtml($rows, $supplier),
+        ], JSON_UNESCAPED_UNICODE);
     }
 
     public function updateExpectedAction(): void
@@ -1228,6 +1624,7 @@ class StoreAdminPurchaseOrders extends Controller
         int $openTotal,
         array $catalog,
         string $pq,
+        string $catalogSupplier = '',
     ): void {
         $e = fn(string|int|float $s): string => $this->view->e((string) $s);
         $id = (int) $po['id'];
@@ -1301,7 +1698,7 @@ class StoreAdminPurchaseOrders extends Controller
 
         echo '<div class="sf-po-grid">';
         echo $this->poInfoPanel($po, $isDraft);
-        echo $this->poSupplierAddressPanel($po, $supplierList, $isDraft);
+        echo $this->poSupplierAddressPanel($po, $supplierList, $isDraft, $catalogSupplier);
         echo $this->poDeliveryPanel($po, $warehouseList, $isDraft);
         echo $this->poSupplierDetailsPanel($po, $isDraft);
         echo '</div>';
@@ -1312,7 +1709,7 @@ class StoreAdminPurchaseOrders extends Controller
 
         echo $this->poActionsBar($po, $isDraft, $isConfirmed, $openTotal);
         echo $this->poTotalsBar($money);
-        echo $this->poProductsSection($po, $lines, $catalog, $pq, $isDraft, $isConfirmed);
+        echo $this->poProductsSection($po, $lines, $catalog, $pq, $isDraft, $isConfirmed, $catalogSupplier);
         if ($isConfirmed && $openTotal > 0) {
             echo $this->poScanReceiveSection($id);
         }
@@ -1665,13 +2062,17 @@ HTML;
      * @param array<string, mixed> $po
      * @param list<array<string, mixed>> $supplierList
      */
-    private function poSupplierAddressPanel(array $po, array $supplierList, bool $isDraft): string
+    private function poSupplierAddressPanel(array $po, array $supplierList, bool $isDraft, string $selectedSupplier = ''): string
     {
         $e = fn(string|int|float $s): string => $this->view->e((string) $s);
         $ro = $isDraft ? '' : ' readonly';
-        $current = (string) ($po['supplier_name'] ?? '');
+        $current = $selectedSupplier !== '' ? $selectedSupplier : (string) ($po['supplier_name'] ?? '');
         $html = '<section class="sf-po-panel is-plain"><h2>Supplier Address</h2><div class="sf-po-body">';
+        $catalogUrl = $isDraft
+            ? $this->url->to('store/admin/purchase-orders/catalog', ['id' => (int) $po['id']])
+            : '';
         $select = '<select class="form-select" name="supplier_name" id="sf-po-supplier"'
+            . ($catalogUrl !== '' ? ' data-catalog-url="' . $e($catalogUrl) . '"' : '')
             . ($isDraft ? '' : ' disabled') . '>';
         $select .= '<option value="">Select supplier</option>';
         foreach ($supplierList as $s) {
@@ -1834,6 +2235,56 @@ HTML;
             . '</div>';
     }
 
+    private function canonicalSupplierName(string $name): string
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return '';
+        }
+        foreach ($this->suppliers->all() as $supplier) {
+            $candidate = trim((string) ($supplier['name'] ?? ''));
+            if ($candidate !== '' && strcasecmp($candidate, $name) === 0) {
+                return $candidate;
+            }
+        }
+        return $name;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     */
+    private function catalogBodyHtml(array $rows, string $supplier): string
+    {
+        $e = fn(string|int|float $s): string => $this->view->e((string) $s);
+        if ($rows === []) {
+            return '<tr><td colspan="7" class="text-muted">No products found'
+                . ($supplier !== '' ? ' for this supplier' : '')
+                . '. Assign a supplier on products or clear the filter.</td></tr>';
+        }
+        $html = '';
+        foreach ($rows as $row) {
+            $vid = (int) $row['variant_id'];
+            $pname = trim((string) ($row['product_name'] ?? ''));
+            $vname = trim((string) ($row['variant_name'] ?? ''));
+            $label = $pname !== '' ? $pname : $vname;
+            if ($vname !== '' && $pname !== '' && $vname !== $pname) {
+                $label .= ' — ' . $vname;
+            }
+            $html .= '<tr class="sf-po-cat-row" data-supplier="'
+                . $e((string) ($row['supplier_name'] ?? '')) . '">';
+            $html .= '<td><input type="checkbox" name="selected[]" value="' . $vid . '"></td>';
+            $html .= '<td class="fw-semibold">' . $e((string) ($row['sku'] ?? '')) . '</td>';
+            $html .= '<td>' . $e($label) . '</td>';
+            $html .= '<td>' . $e((string) ($row['supplier_sku'] ?? '')) . '</td>';
+            $html .= '<td class="text-end">' . (int) ($row['stock'] ?? 0) . '</td>';
+            $html .= '<td class="text-end">£' . number_format((float) ($row['cost'] ?? 0), 2) . '</td>';
+            $html .= '<td><input type="number" class="form-control form-control-sm text-end" name="qty['
+                . $vid . ']" min="1" value="1"></td>';
+            $html .= '</tr>';
+        }
+        return $html;
+    }
+
     /**
      * @param array<string, mixed> $po
      * @param list<array<string, mixed>> $lines
@@ -1846,6 +2297,7 @@ HTML;
         string $pq,
         bool $isDraft,
         bool $isConfirmed,
+        string $catalogSupplier = '',
     ): string {
         $e = fn(string|int|float $s): string => $this->view->e((string) $s);
         $id = (int) $po['id'];
@@ -1861,6 +2313,7 @@ HTML;
             $html .= '<form method="get" action="' . $e($filterUrl) . '" class="sf-po-filter">';
             $html .= '<input type="hidden" name="route" value="store/admin/purchase-orders/view">';
             $html .= '<input type="hidden" name="id" value="' . $id . '">';
+            $html .= '<input type="hidden" name="supplier" value="' . $e($catalogSupplier) . '">';
             $html .= '<input type="search" class="form-control" name="pq" value="' . $e($pq)
                 . '" placeholder="Filter SKU, name, barcode…" style="max-width:18rem">';
             $html .= '<button type="submit" class="btn btn-sm btn-outline-secondary">Filter</button>';
@@ -1872,32 +2325,8 @@ HTML;
             $html .= '<div class="sf-po-picker table-responsive"><table class="table table-sm align-middle mb-0">';
             $html .= '<thead class="table-light"><tr><th style="width:2rem"></th><th>SKU</th><th>Product</th>'
                 . '<th>Supplier SKU</th><th class="text-end">Stock</th><th class="text-end">Cost</th>'
-                . '<th class="text-end" style="width:5.5rem">Qty</th></tr></thead><tbody>';
-            if ($catalog === []) {
-                $html .= '<tr><td colspan="7" class="text-muted">No products found'
-                    . ((string) ($po['supplier_name'] ?? '') !== '' ? ' for this supplier' : '')
-                    . '. Assign a supplier on products or clear the filter.</td></tr>';
-            }
-            foreach ($catalog as $row) {
-                $vid = (int) $row['variant_id'];
-                $pname = trim((string) ($row['product_name'] ?? ''));
-                $vname = trim((string) ($row['variant_name'] ?? ''));
-                $label = $pname !== '' ? $pname : $vname;
-                if ($vname !== '' && $pname !== '' && $vname !== $pname) {
-                    $label .= ' — ' . $vname;
-                }
-                $html .= '<tr class="sf-po-cat-row" data-supplier="'
-                    . $e((string) ($row['supplier_name'] ?? '')) . '">';
-                $html .= '<td><input type="checkbox" name="selected[]" value="' . $vid . '"></td>';
-                $html .= '<td class="fw-semibold">' . $e((string) ($row['sku'] ?? '')) . '</td>';
-                $html .= '<td>' . $e($label) . '</td>';
-                $html .= '<td>' . $e((string) ($row['supplier_sku'] ?? '')) . '</td>';
-                $html .= '<td class="text-end">' . (int) ($row['stock'] ?? 0) . '</td>';
-                $html .= '<td class="text-end">£' . number_format((float) ($row['cost'] ?? 0), 2) . '</td>';
-                $html .= '<td><input type="number" class="form-control form-control-sm text-end" name="qty['
-                    . $vid . ']" min="1" value="1"></td>';
-                $html .= '</tr>';
-            }
+                . '<th class="text-end" style="width:5.5rem">Qty</th></tr></thead><tbody id="sf-po-catalog-body">';
+            $html .= $this->catalogBodyHtml($catalog, $catalogSupplier);
             $html .= '</tbody></table></div>';
             $html .= '<div class="sf-po-toolbar">';
             $html .= '<button type="submit" class="sf-po-add">+ Add Selected Products</button>';
@@ -1997,12 +2426,33 @@ HTML;
             });
             const code = document.getElementById('sf-po-sup-code');
             if (code) code.value = data.code || '';
-            const name = this.value;
-            document.querySelectorAll('.sf-po-cat-row').forEach(function (row) {
-                const sup = row.getAttribute('data-supplier') || '';
-                row.style.display = (!name || sup === name) ? '' : 'none';
-            });
+            loadCatalog(this);
+            const supplierInput = document.querySelector('#sf-po-picker-wrap input[name="supplier"]');
+            if (supplierInput) supplierInput.value = this.value || '';
         });
+    }
+    let catalogReq = 0;
+    function loadCatalog(sel) {
+        const body = document.getElementById('sf-po-catalog-body');
+        const base = sel.getAttribute('data-catalog-url') || '';
+        if (!body || !base) return;
+        const req = ++catalogReq;
+        const target = new URL(base, window.location.href);
+        target.searchParams.set('supplier', sel.value || '');
+        const pqInput = document.querySelector('#sf-po-picker-wrap input[name="pq"]');
+        if (pqInput && pqInput.value) target.searchParams.set('pq', pqInput.value);
+        body.innerHTML = '<tr><td colspan="7" class="text-muted">Loading products…</td></tr>';
+        fetch(target.toString(), {headers: {'Accept': 'application/json'}, credentials: 'same-origin'})
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (req !== catalogReq) return;
+                body.innerHTML = (data && data.html) ? data.html
+                    : '<tr><td colspan="7" class="text-muted">No products found.</td></tr>';
+            })
+            .catch(function () {
+                if (req !== catalogReq) return;
+                body.innerHTML = '<tr><td colspan="7" class="text-muted">Could not load products.</td></tr>';
+            });
     }
     const hideBtn = document.getElementById('sf-po-hide-btn');
     const picker = document.getElementById('sf-po-picker-wrap');

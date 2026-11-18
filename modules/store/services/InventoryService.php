@@ -931,6 +931,45 @@ final class InventoryService
     }
 
     /**
+     * Stock movements across all variants of a product.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function movementsForProduct(int $productId, int $limit = 75): array
+    {
+        if ($productId <= 0 || !TenantContext::get()->has()) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        $rows = $this->db->query(
+            "SELECT m.`id`, m.`variant_id`, m.`delta`, m.`reason`, m.`note`, m.`user_id`, m.`created_at`,
+                    v.`sku`, i.`quantity`
+               FROM `#__store_stock_movements` m
+               INNER JOIN `#__store_product_variants` v
+                 ON v.`id` = m.`variant_id` AND v.`tenant_id` = m.`tenant_id`
+               LEFT JOIN `#__store_inventory` i
+                 ON i.`variant_id` = m.`variant_id` AND i.`tenant_id` = m.`tenant_id`
+              WHERE v.`product_id` = ?
+                AND m.`tenant_id` = ?
+              ORDER BY m.`created_at` DESC
+              LIMIT {$limit}",
+            [$productId, $this->tenantId()]
+        )->rows;
+
+        return array_map(static fn(array $r): array => [
+            'id'         => (int) $r['id'],
+            'variant_id' => (int) $r['variant_id'],
+            'sku'        => (string) ($r['sku'] ?? ''),
+            'delta'      => (int) $r['delta'],
+            'reason'     => (string) $r['reason'],
+            'note'       => (string) $r['note'],
+            'user_id'    => isset($r['user_id']) ? (int) $r['user_id'] : null,
+            'created_at' => (string) $r['created_at'],
+            'quantity'   => isset($r['quantity']) ? (int) $r['quantity'] : null,
+        ], $rows);
+    }
+
+    /**
      * Paginated stock grid for Inventory landing.
      *
      * @param array{q?:string, stock?:string, warehouse?:string, active?:string} $filters

@@ -333,9 +333,9 @@ final class EbayInventoryClient
 
         $storeCats = [];
         foreach (['store_category_1', 'store_category_2'] as $key) {
-            $path = trim((string) ($policies[$key] ?? ''));
-            if ($path !== '' && !in_array($path, $storeCats, true)) {
-                $storeCats[] = $path;
+            $name = $this->storeCategoryName((string) ($policies[$key] ?? ''));
+            if ($name !== '' && !in_array($name, $storeCats, true)) {
+                $storeCats[] = $name;
             }
         }
         if ($storeCats !== []) {
@@ -451,6 +451,10 @@ final class EbayInventoryClient
                     'currency' => $currency !== null && $currency !== '' ? $currency : 'GBP',
                 ],
             ];
+            $offerId = $this->firstOfferId($sku);
+            if ($offerId !== '') {
+                $offer['offerId'] = $offerId;
+            }
             if ($quantity !== null) {
                 $offer['availableQuantity'] = max(0, $quantity);
             }
@@ -461,6 +465,33 @@ final class EbayInventoryClient
         $this->request('POST', $url, [
             'requests' => [$request],
         ]);
+    }
+
+    /**
+     * eBay storeCategoryNames is the category name, not an id or "/Parent/Child" path.
+     * A path is rejected as HTTP 400 "Unknown error".
+     */
+    private function storeCategoryName(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+        $parts = array_values(array_filter(explode('/', $value), static fn(string $part): bool => trim($part) !== ''));
+        if ($parts === []) {
+            return '';
+        }
+        return trim((string) $parts[array_key_last($parts)]);
+    }
+
+    private function firstOfferId(string $sku): string
+    {
+        try {
+            $offers = $this->getOffersBySku($sku);
+        } catch (RuntimeException) {
+            return '';
+        }
+        return trim((string) ($offers[0]['offerId'] ?? ''));
     }
 
     private function baseUrl(): string
@@ -486,7 +517,7 @@ final class EbayInventoryClient
             'Accept: application/json',
             'Authorization: Bearer ' . $this->accessToken,
             'X-EBAY-C-MARKETPLACE-ID: ' . $this->marketplace,
-            'Content-Language: en-GB',
+            'Content-Language: ' . $this->contentLanguage(),
             'User-Agent: Store/1.0',
         ];
 
@@ -501,7 +532,15 @@ final class EbayInventoryClient
         ];
 
         if ($method !== 'GET') {
-            $opts[CURLOPT_POSTFIELDS] = json_encode($payload, JSON_UNESCAPED_SLASHES);
+            // An empty PHP array encodes as [], which eBay rejects on publish
+            // (HTTP 400, message "Unknown error"). Object endpoints expect {}.
+            $body = $payload === []
+                ? '{}'
+                : json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($body === false) {
+                throw new RuntimeException('Could not encode the eBay inventory request.');
+            }
+            $opts[CURLOPT_POSTFIELDS] = $body;
         }
 
         curl_setopt_array($ch, $opts);
@@ -515,22 +554,129 @@ final class EbayInventoryClient
         }
 
         $decoded = json_decode((string) $body, true);
+        if (!is_array($decoded)) {
+            $decoded = [];
+        }
         if ($code < 200 || $code >= 300) {
-            $msg = is_array($decoded) ? $this->extractError($decoded) : substr((string) $body, 0, 200);
+            $msg = $decoded !== []
+                ? $this->extractError($decoded)
+                : trim(substr((string) $body, 0, 300));
+            if ($msg === '') {
+                $msg = 'empty response';
+            }
             throw new RuntimeException("eBay inventory API failed (HTTP {$code}): {$msg}");
         }
 
-        return is_array($decoded) ? $decoded : [];
+        $bulk = $this->extractBulkError($decoded);
+        if ($bulk !== '') {
+            throw new RuntimeException('eBay inventory API failed: ' . $bulk);
+        }
+
+        return $decoded;
+    }
+
+    private function contentLanguage(): string
+    {
+        return match ($this->marketplace) {
+            'EBAY_US', 'EBAY_MOTORS_US' => 'en-US',
+            'EBAY_AU'                   => 'en-AU',
+            'EBAY_CA'                   => 'en-CA',
+            'EBAY_DE'                   => 'de-DE',
+            'EBAY_FR'                   => 'fr-FR',
+            'EBAY_IT'                   => 'it-IT',
+            'EBAY_ES'                   => 'es-ES',
+            default                     => 'en-GB',
+        };
+    }
+
+    /**
+     * bulk_update_price_quantity can return HTTP 200 with a per-SKU failure.
+     *
+     * @param array<string, mixed> $decoded
+     */
+    private function extractBulkError(array $decoded): string
+    {
+        $responses = $decoded['responses'] ?? null;
+        if (!is_array($responses)) {
+            return '';
+        }
+        $parts = [];
+        foreach ($responses as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $status = (int) ($row['statusCode'] ?? 200);
+            if ($status < 400) {
+                continue;
+            }
+            $sku = trim((string) ($row['sku'] ?? ''));
+            $detail = $this->extractError($row);
+            $parts[] = ($sku !== '' ? $sku . ': ' : '') . $detail;
+        }
+        return implode('; ', $parts);
     }
 
     /** @param array<string, mixed> $decoded */
     private function extractError(array $decoded): string
     {
-        if (isset($decoded['errors'][0]['message'])) {
-            return (string) $decoded['errors'][0]['message'];
+        $candidates = [];
+        if (isset($decoded['errors']) && is_array($decoded['errors'])) {
+            $candidates = array_is_list($decoded['errors']) ? $decoded['errors'] : [$decoded['errors']];
         }
-        if (isset($decoded['message'])) {
-            return (string) $decoded['message'];
+        $errorMessage = $decoded['errorMessage']['error'] ?? null;
+        if (is_array($errorMessage)) {
+            $candidates = array_merge($candidates, array_is_list($errorMessage) ? $errorMessage : [$errorMessage]);
+        }
+
+        foreach ($candidates as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+            $long = trim((string) ($error['longMessage'] ?? ''));
+            $msg = trim((string) ($error['message'] ?? ''));
+            $text = $long !== '' && ($msg === '' || strcasecmp($msg, 'Unknown error') === 0) ? $long : $msg;
+            if ($text === '' || strcasecmp($text, 'Unknown error') === 0) {
+                $text = $long !== '' ? $long : $msg;
+            }
+            $extra = [];
+            $errorId = trim((string) ($error['errorId'] ?? ''));
+            if ($errorId !== '') {
+                $extra[] = 'error ' . $errorId;
+            }
+            $params = $error['parameters'] ?? null;
+            if (is_array($params)) {
+                foreach ($params as $param) {
+                    if (!is_array($param)) {
+                        continue;
+                    }
+                    $name = trim((string) ($param['name'] ?? ''));
+                    $value = trim((string) ($param['value'] ?? ''));
+                    if ($value === '') {
+                        continue;
+                    }
+                    $extra[] = ($name !== '' ? $name . '=' : '') . $value;
+                }
+            }
+            if ($text === '' && $extra === []) {
+                continue;
+            }
+            if ($text === '' || strcasecmp($text, 'Unknown error') === 0) {
+                return $extra !== [] ? implode('; ', $extra) : ($text !== '' ? $text : 'Unknown error');
+            }
+            return $extra !== [] ? $text . ' (' . implode('; ', $extra) . ')' : $text;
+        }
+
+        $description = trim((string) ($decoded['error_description'] ?? ''));
+        if ($description !== '') {
+            return $description;
+        }
+        $error = trim((string) ($decoded['error'] ?? ''));
+        if ($error !== '') {
+            return $error;
+        }
+        $message = trim((string) ($decoded['message'] ?? ''));
+        if ($message !== '') {
+            return $message;
         }
         return 'Unknown error';
     }

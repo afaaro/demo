@@ -300,7 +300,7 @@ class StoreAdminProducts extends Controller
 
             echo '<div class="sf-pm">';
             echo '<div class="sf-pm-head">';
-            echo '<h1>Products</h1>';
+            echo '<h1><i class="bi bi-box-seam"></i> Products</h1>';
             echo '<div class="sf-pm-tools">';
             echo '<form method="get" action="' . $e($this->url->to('store/admin/products')) . '"'
                . ' class="sf-pm-search" id="sf-pm-search-form">';
@@ -311,7 +311,7 @@ class StoreAdminProducts extends Controller
                 echo '<input type="hidden" name="' . $e((string) $k) . '" value="' . $e((string) $v) . '">';
             }
             echo '<input type="search" name="q" value="' . $e($searchInput) . '"'
-               . ' placeholder="Search SKU, name, EAN, MPN…" minlength="3">';
+               . ' placeholder="Search by SKU, Name, EAN, MPN, Supplier SKU (min. 3 characters)" minlength="3">';
             echo '<button type="submit" title="Search"><i class="bi bi-search"></i></button>';
             echo '</form>';
             echo '<a href="' . $e($this->url->to('store/admin/products/export')) . '" class="sf-btn">Export</a>';
@@ -322,7 +322,7 @@ class StoreAdminProducts extends Controller
             echo '<button type="submit" class="sf-btn is-danger">Clear all</button>';
             echo '</form>';
             echo '<a href="' . $e($this->url->to('store/admin/products/add')) . '" class="sf-btn is-primary">'
-               . '<i class="bi bi-plus-lg"></i>New product</a>';
+               . '+ New Product</a>';
             echo '</div></div>';
 
             // Column filters (GET) — sibling of bulk form; inputs use form="sf-pm-col-filters"
@@ -361,9 +361,11 @@ class StoreAdminProducts extends Controller
             echo $this->request->csrfField();
             echo '<div class="sf-pm-toolbar">';
             echo '<div class="d-flex flex-wrap align-items-center gap-2">';
-            echo '<span class="sf-pm-count" id="bulk-count">0 selected</span>';
             echo '<select name="action" id="bulk-action" style="min-width:10rem">';
-            echo '<option value="">Bulk actions</option>';
+            echo '<option value="">Bulk Action</option>';
+            echo '<option value="archive">Archive</option>';
+            echo '<option value="clone">Clone</option>';
+            echo '<option value="export">Export</option>';
             echo '<option value="activate">Activate</option>';
             echo '<option value="deactivate">Deactivate</option>';
             echo '<option value="add_category">Add to category…</option>';
@@ -400,6 +402,7 @@ class StoreAdminProducts extends Controller
             }
             echo '</select>';
             echo '<button type="submit" class="sf-btn" id="bulk-apply" disabled>Confirm</button>';
+            echo '<span class="sf-pm-count" id="bulk-count">0 items selected.</span>';
             echo '</div>';
             echo '<div class="d-flex flex-wrap align-items-center gap-2">';
 
@@ -745,8 +748,8 @@ class StoreAdminProducts extends Controller
 
                 function updateCount() {
                     const n = checkboxes().filter(cb => cb.checked).length;
-                    countLabel.textContent = n + ' selected';
-                    applyBtn.disabled = n === 0 || !bulkAction.value;
+                    countLabel.textContent = n + ' item' + (n === 1 ? '' : 's') + ' selected.';
+                    applyBtn.disabled = (!bulkAction.value) || (bulkAction.value !== 'export' && n === 0);
                 }
 
                 if (selectAll) {
@@ -1303,6 +1306,8 @@ class StoreAdminProducts extends Controller
         $variantsHtml        = $this->renderVariantsSection($product, $selectedAttrs, $attributes, $stockMap);
         $listingsHtml        = $this->renderListingsTab($id, (string) $old['sku'], (string) $old['name']);
         $ordersHtml          = $this->renderProductOrdersTab($id);
+        $adjustmentsHtml     = $this->renderProductAdjustmentsTab($id);
+        $deliveriesHtml      = $this->renderProductDeliveriesTab($id);
         $auditHtml           = $this->renderProductAuditTab($id);
         $documentsHtml       = $this->renderProductDocumentsTab($id);
         $bundleHtml          = $this->renderProductBundleTab($id, $old);
@@ -1310,7 +1315,8 @@ class StoreAdminProducts extends Controller
 
         echo $this->view->inline(function () use (
             $old, $id, $attributePickerHtml, $categoryPickerHtml, $variantsHtml,
-            $listingsHtml, $ordersHtml, $auditHtml, $documentsHtml, $bundleHtml, $inventoryTotal
+            $listingsHtml, $ordersHtml, $adjustmentsHtml, $deliveriesHtml,
+            $auditHtml, $documentsHtml, $bundleHtml, $inventoryTotal
         ) {
             $this->view->assign('title', (string) ($old['name'] ?: 'Product details'));
             echo $this->productForm(
@@ -1326,6 +1332,8 @@ class StoreAdminProducts extends Controller
                 $auditHtml,
                 $documentsHtml,
                 $bundleHtml,
+                $adjustmentsHtml,
+                $deliveriesHtml,
             );
         });
     }
@@ -4009,6 +4017,8 @@ JS;
         string $auditHtml = '',
         string $documentsHtml = '',
         string $bundleHtml = '',
+        string $adjustmentsHtml = '',
+        string $deliveriesHtml = '',
     ): string {
         $isEdit = $productId !== null && $productId > 0;
         $title  = trim((string) ($old['name'] ?? '')) !== '' ? (string) $old['name'] : ($isEdit ? 'Product details' : 'Add Product');
@@ -4024,13 +4034,14 @@ JS;
         ob_start();
 
         echo '<style>
-          .sf-pd-layout{display:grid;grid-template-columns:220px 1fr;gap:1.25rem}
+          .sf-pd-layout{display:grid;grid-template-columns:220px 1fr;gap:1.25rem;align-items:start}
           @media (max-width:991.98px){.sf-pd-layout{grid-template-columns:1fr}}
-          .sf-pd-nav{position:sticky;top:1rem}
+          .sf-pd-nav{position:sticky;top:calc(var(--admin-topbar-h, 56px) + .75rem);align-self:start;max-height:calc(100vh - var(--admin-topbar-h, 56px) - 1.5rem);overflow:auto;z-index:2}
+          @media (max-width:991.98px){.sf-pd-nav{position:static;max-height:none;overflow:visible}}
           .sf-pd-nav .list-group-item{border:0;border-radius:.375rem;padding:.45rem .75rem;color:inherit}
           .sf-pd-nav .list-group-item.active{background:var(--bs-primary);color:#fff}
           .sf-pd-nav .list-group-item.disabled{opacity:.45}
-          .sf-pd-section{scroll-margin-top:1rem}
+          .sf-pd-section,.sf-pd-panel,[id^="sf-reg-"],#sf-sec-info,#sf-sec-variants{scroll-margin-top:calc(var(--admin-topbar-h, 56px) + .75rem)}
           .sf-pd-field-row{display:grid;grid-template-columns:160px 1fr;gap:.75rem;align-items:center;margin-bottom:.75rem}
           @media (max-width:575.98px){.sf-pd-field-row{grid-template-columns:1fr}}
           .sf-pd-field-row>label{margin:0;font-size:.875rem;color:var(--bs-secondary-color)}
@@ -4041,7 +4052,6 @@ JS;
           .sf-pd-listing .sf-pd-ch{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--bs-secondary-color)}
           .sf-pd-panel{display:none}
           .sf-pd-panel.is-active{display:block}
-          #sf-sec-variants{scroll-margin-top:1rem}
           .sf-ship-card{border:1px solid var(--bs-border-color);border-radius:.5rem;overflow:hidden;margin-bottom:1rem;background:#f8f9fa}
           .sf-ship-card>.sf-ship-head{background:var(--bs-primary);color:#fff;padding:.65rem 1rem;display:flex;justify-content:space-between;align-items:center}
           .sf-ship-card>.sf-ship-body{padding:1rem}
@@ -4093,16 +4103,18 @@ JS;
             ['Channel Attributes', 'general', true, 'sf-sec-channel-attrs'],
             ['Shipping & Handling', 'shipping', true, ''],
             ['Listings', 'listings', $isEdit, ''],
+            ['Adjustments', 'adjustments', $isEdit, ''],
+            ['Additions & Swaps', 'bundle', $isEdit, ''],
             ['Categories', 'general', true, 'sf-sec-categories'],
             ['Attributes', 'general', true, 'sf-sec-attributes'],
-            ['Notes', 'notes', true, ''],
             ['Orders', 'orders', $isEdit, ''],
+            ['Deliveries', 'deliveries', $isEdit, ''],
+            ['Notes', 'notes', true, ''],
             ['Audit Trail', 'audit', $isEdit, ''],
+            ['Documents', 'documents', $isEdit, ''],
             ['Regulatory Information', 'regulatory', true, 'sf-reg-regulatory-information'],
             ['Responsible Person', 'regulatory', true, 'sf-reg-responsible-person'],
             ['Company Identifiers', 'regulatory', true, 'sf-reg-company-identifiers'],
-            ['Documents', 'documents', $isEdit, ''],
-            ['Additions & Swaps', 'bundle', $isEdit, ''],
         ];
         foreach ($nav as [$label, $panel, $enabled, $scrollTo]) {
             $active = $label === 'General' ? ' active' : '';
@@ -4332,6 +4344,16 @@ JS;
             echo $ordersHtml;
             echo '</div>';
         }
+        if ($isEdit && $adjustmentsHtml !== '') {
+            echo '<div class="sf-pd-panel" id="sf-panel-adjustments" data-sf-panel-body="adjustments">';
+            echo $adjustmentsHtml;
+            echo '</div>';
+        }
+        if ($isEdit && $deliveriesHtml !== '') {
+            echo '<div class="sf-pd-panel" id="sf-panel-deliveries" data-sf-panel-body="deliveries">';
+            echo $deliveriesHtml;
+            echo '</div>';
+        }
         if ($isEdit && $auditHtml !== '') {
             echo '<div class="sf-pd-panel" id="sf-panel-audit" data-sf-panel-body="audit">';
             echo $auditHtml;
@@ -4371,7 +4393,7 @@ JS;
             }
             const foot = document.querySelector(".sf-pd-product-footer");
             if (foot) {
-              foot.style.display = (name === "listings" || name === "orders" || name === "audit" || name === "documents" || name === "bundle")
+              foot.style.display = (name === "listings" || name === "orders" || name === "adjustments" || name === "deliveries" || name === "audit" || name === "documents" || name === "bundle")
                 ? "none" : "";
             }
             if (scrollId) {
@@ -4506,6 +4528,95 @@ JS;
             $out[$key] = ['from' => $from, 'to' => $to];
         }
         return $out;
+    }
+
+    private function renderProductAdjustmentsTab(int $productId): string
+    {
+        $variants = $this->variants->forProduct($productId);
+        $movements = $this->inventory->movementsForProduct($productId, 75);
+        ob_start();
+        echo '<div class="sf-ship-card"><div class="sf-ship-head"><strong>Adjustments</strong></div>';
+        echo '<div class="sf-ship-body">';
+        echo '<p class="small text-muted mb-3">Manual stock changes and recent inventory movements for this product.</p>';
+
+        if ($variants !== []) {
+            echo '<form method="get" action="' . $this->view->e($this->url->to('store/admin/inventory/adjust'))
+               . '" class="row g-2 align-items-end mb-4">';
+            echo '<div class="col-md-6"><label class="form-label small mb-1">Adjust variant</label>'
+               . '<select name="id" class="form-select form-select-sm" required>';
+            foreach ($variants as $v) {
+                $vid = (int) ($v->id ?? 0);
+                if ($vid <= 0) {
+                    continue;
+                }
+                echo '<option value="' . $vid . '">' . $this->view->e($v->sku !== '' ? $v->sku : ('#' . $vid))
+                   . '</option>';
+            }
+            echo '</select></div>';
+            echo '<div class="col-auto"><button type="submit" class="btn btn-sm btn-success">Open adjust form</button></div>';
+            echo '</form>';
+        }
+
+        if ($movements === []) {
+            echo '<div class="alert alert-info mb-0">No stock movements recorded for this product yet.</div>';
+            echo '</div></div>';
+            return (string) ob_get_clean();
+        }
+
+        echo '<div class="table-responsive"><table class="table table-sm align-middle mb-0">';
+        echo '<thead><tr><th>Date</th><th>SKU</th><th class="text-end">Adjustment</th>'
+           . '<th>Reason</th><th>Note</th><th class="text-end">Stock now</th></tr></thead><tbody>';
+        foreach ($movements as $m) {
+            $delta = (int) $m['delta'];
+            $deltaCls = $delta > 0 ? 'text-success' : ($delta < 0 ? 'text-danger' : '');
+            echo '<tr>';
+            echo '<td class="small text-nowrap">' . $this->view->e((string) $m['created_at']) . '</td>';
+            echo '<td><code>' . $this->view->e((string) $m['sku']) . '</code></td>';
+            echo '<td class="text-end ' . $deltaCls . '">' . ($delta > 0 ? '+' : '') . $delta . '</td>';
+            echo '<td class="small">' . $this->view->e((string) $m['reason']) . '</td>';
+            echo '<td class="small">' . $this->view->e((string) $m['note']) . '</td>';
+            echo '<td class="text-end">' . ($m['quantity'] === null ? '—' : (int) $m['quantity']) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div></div></div>';
+        return (string) ob_get_clean();
+    }
+
+    private function renderProductDeliveriesTab(int $productId): string
+    {
+        $rows = $this->purchaseOrders->deliveriesForProduct($productId, 75);
+        ob_start();
+        echo '<div class="sf-ship-card"><div class="sf-ship-head"><strong>Deliveries</strong></div>';
+        echo '<div class="sf-ship-body">';
+        echo '<p class="small text-muted mb-3">Purchase order lines for this product (inbound deliveries).</p>';
+        if ($rows === []) {
+            echo '<div class="alert alert-info mb-0">No purchase order lines for this product yet.</div>';
+            echo '</div></div>';
+            return (string) ob_get_clean();
+        }
+
+        echo '<div class="table-responsive"><table class="table table-sm align-middle mb-0">';
+        echo '<thead><tr><th>PO</th><th>Supplier</th><th>SKU</th><th>Status</th>'
+           . '<th>Expected</th><th class="text-end">Ordered</th><th class="text-end">Received</th>'
+           . '<th class="text-end">Open</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $poId = (int) $r['po_id'];
+            $ref = trim((string) ($r['reference'] ?? ''));
+            $label = $ref !== '' ? $ref : ('#' . $poId);
+            echo '<tr>';
+            echo '<td><a href="' . $this->view->e($this->url->to('store/admin/purchase-orders/view', ['id' => $poId])) . '">'
+               . $this->view->e($label) . '</a></td>';
+            echo '<td class="small">' . $this->view->e((string) ($r['supplier_name'] ?? '')) . '</td>';
+            echo '<td><code>' . $this->view->e((string) ($r['sku'] ?? '')) . '</code></td>';
+            echo '<td class="small">' . $this->view->e((string) ($r['status'] ?? '')) . '</td>';
+            echo '<td class="small text-nowrap">' . $this->view->e((string) ($r['expected_date'] ?? '—')) . '</td>';
+            echo '<td class="text-end">' . (int) ($r['qty_ordered'] ?? 0) . '</td>';
+            echo '<td class="text-end">' . (int) ($r['qty_received'] ?? 0) . '</td>';
+            echo '<td class="text-end">' . (int) ($r['open_qty'] ?? 0) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div></div></div>';
+        return (string) ob_get_clean();
     }
 
     private function renderProductOrdersTab(int $productId): string
