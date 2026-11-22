@@ -1,33 +1,6 @@
-# Environment & secrets
-.env
-config.php
-
-system/config/store.php
-system/config/captcha.php
-system/config/database.php
-modules/store/config/app.php
-modules/store/config/ebay.php
-modules/store/config/amazon.php
-modules/store/config/paypal.php
-system/config/storefeeder.php
-
-# Web root — ignore public/temp if needed
-public/temp/
-
-# Cache & logs
-*.log
-cache/
-system/cache/
-modules/*/cache/
-
-# Dependencies
 vendor/
 uploads/*
 storage/*
-composer.lock
-
-# IDE & OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+*.sql
+system/config/*
+modules/*/config/*
