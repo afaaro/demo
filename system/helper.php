@@ -21,7 +21,7 @@ function get_modules(?string $module = null): array
     static $cache = null;
     if ($cache === null) {
         $cache = [];
-        foreach ([BASEDIR . 'system/modules', BASEDIR . 'modules'] as $path) {
+        foreach ([BASEDIR . 'system'.DIRECTORY_SEPARATOR.'modules', BASEDIR . 'modules'] as $path) {
             if (!is_dir($path)) continue;
             foreach (scandir($path) ?: [] as $folder) {
                 if ($folder === '.' || $folder === '..') continue;

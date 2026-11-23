@@ -4,7 +4,6 @@ declare(strict_types=1);
 use System\Engine\Autoloader;
 use System\Engine\Loader;
 use System\Engine\Registry;
-use System\Library\AdminNav;
 use System\Library\Block;
 use System\Library\Cache;
 use System\Library\Config;
@@ -18,9 +17,10 @@ use System\Library\Notify;
 use System\Library\Ram;
 use System\Library\Request;
 use System\Library\Session;
-use System\Library\Toolbar;
 use System\Library\Url;
 use System\Library\View;
+use System\Services\Toolbar;
+use System\Services\AdminNav;
 use System\Services\AdminToolbar;
 use System\Services\User;
 
@@ -118,12 +118,14 @@ foreach (glob(BASEDIR . 'modules/*/bootstrap.php') ?: [] as $file) {
 }
 
 ErrorHandler::register();
+
 $log = $registry->get('log');
 $log->withContext([
     'req'  => bin2hex(random_bytes(4)),
     'ip'   => $registry->get('request')->ip(),
     'user' => User::id(),
 ]);
+
 if (random_int(1, 1000) === 1) {
     $log->prune();
 }

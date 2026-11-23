@@ -1,9 +1,11 @@
 <?php
 declare(strict_types=1);
 
-namespace System\Library;
+namespace System\Services;
 
 use InvalidArgumentException;
+use System\Library\Config;
+use System\Library\Url;
 
 final class Toolbar
 {
@@ -146,6 +148,10 @@ final class Toolbar
         foreach ($modulePaths as $modulePath) {
             $moduleDir = rtrim($modulePath, '/\\');
 
+            $parts = array_values(array_filter(explode(DIRECTORY_SEPARATOR, $modulePath), static fn($p) => $p !== ''));
+            $module = array_pop($parts);
+            if (!get_enabled_module($module)) continue;
+            
             if (!is_dir($moduleDir)) {
                 error_log("[Toolbar] Module path does not exist: {$modulePath}");
                 continue;

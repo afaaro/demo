@@ -3,8 +3,6 @@ declare(strict_types=1);
 
 namespace System\Services;
 
-use System\Library\Toolbar;
-
 /**
  * Loads each module's helpers/toolbar.php into the shared Toolbar.
  * Shown when the user has any module.view / module permission / *.

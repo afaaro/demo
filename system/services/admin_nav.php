@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
 
-namespace System\Library;
+namespace System\Services;
+
+use System\Library\Config;
+use System\Library\Url;
 
 final class AdminNav
 {
