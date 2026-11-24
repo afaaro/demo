@@ -32,34 +32,39 @@ final class UserSessionService
         }
 
         $sid = $this->session->id();
+
         if ($sid === '') {
             return;
         }
 
         $now = date('Y-m-d H:i:s');
-        $ip = $this->clientIp();
-        $ua = mb_substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255);
+        $ip  = $this->clientIp();
+        $ua  = mb_substr(
+            (string) ($_SERVER['HTTP_USER_AGENT'] ?? ''),
+            0,
+            255
+        );
 
-        try {
-            $this->db->query(
-                'INSERT INTO `#__user_sessions`
-                    (`id`, `user_id`, `ip`, `user_agent`, `last_activity`, `created_at`)
-                 VALUES (?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                    `user_id` = VALUES(`user_id`),
-                    `ip` = VALUES(`ip`),
-                    `user_agent` = VALUES(`user_agent`),
-                    `last_activity` = VALUES(`last_activity`)',
-                [$sid, $userId, $ip, $ua, $now, $now]
-            );
-            $this->db->update('users', [
-                'last_seen_at' => $now,
-                'updated_at'   => $now,
-            ], ['id' => $userId]);
-            $this->session->set(self::SESSION_TOUCH_KEY, time());
-        } catch (Throwable) {
-            // Table may not exist yet before migrate — don't break login.
-        }
+        $this->db->query(
+            'INSERT INTO `#__user_sessions`
+                (`id`, `user_id`, `ip`, `user_agent`, `last_activity`, `created_at`)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                `user_id` = VALUES(`user_id`),
+                `ip` = VALUES(`ip`),
+                `user_agent` = VALUES(`user_agent`),
+                `last_activity` = VALUES(`last_activity`)',
+            [$sid, $userId, $ip, $ua, $now, $now]
+        );
+
+        $this->db->update('user', [
+            'last_seen_at' => $now,
+            'updated_at'   => $now,
+        ], [
+            'id' => $userId,
+        ]);
+
+        $this->session->set(self::SESSION_TOUCH_KEY, time());
     }
 
     public function touch(int $userId): void
@@ -80,10 +85,9 @@ final class UserSessionService
 
         $now = date('Y-m-d H:i:s');
         try {
-            $exists = (int) $this->db->query(
-                'SELECT COUNT(*) FROM `#__user_sessions` WHERE `id` = ?',
-                [$sid]
-            )->value;
+            $exists = $this->db->exists('user_sessions', [
+                'id' => $sid,
+            ]);
 
             if ($exists > 0) {
                 $this->db->query(
@@ -104,7 +108,7 @@ final class UserSessionService
                 return;
             }
 
-            $this->db->update('users', [
+            $this->db->update('user', [
                 'last_seen_at' => $now,
             ], ['id' => $userId]);
             $this->session->set(self::SESSION_TOUCH_KEY, time());
@@ -132,11 +136,12 @@ final class UserSessionService
         if ($userId <= 0) {
             return;
         }
-        try {
-            $this->db->query('DELETE FROM `#__user_sessions` WHERE `user_id` = ?', [$userId]);
-        } catch (Throwable) {
-            // ignore
-        }
+
+        $this->db->query(
+            'DELETE FROM `#__user_sessions`
+            WHERE `user_id` = ?',
+            [$userId]
+        );
     }
 
     /** Purge stale session rows older than the online window × 4. */
@@ -164,15 +169,23 @@ final class UserSessionService
         $since = date('Y-m-d H:i:s', time() - self::ONLINE_WINDOW);
         try {
             $rows = $this->db->query(
-                "SELECT u.`id` AS user_id, u.`username`, u.`email`, u.`display_name`,
-                        COUNT(s.`id`) AS sessions,
-                        MAX(s.`last_activity`) AS last_activity,
-                        SUBSTRING_INDEX(GROUP_CONCAT(s.`ip` ORDER BY s.`last_activity` DESC), ',', 1) AS ip
-                   FROM `#__user_sessions` s
-                   JOIN `#__users` u ON u.`id` = s.`user_id`
-                  WHERE s.`last_activity` >= ?
-                  GROUP BY u.`id`, u.`username`, u.`email`, u.`display_name`
-                  ORDER BY last_activity DESC",
+                "SELECT
+                    u.`id` AS user_id,
+                    u.`user` AS username,
+                    u.`email`,
+                    u.`name` AS display_name,
+                    COUNT(s.`id`) AS sessions,
+                    MAX(s.`last_activity`) AS last_activity,
+                    SUBSTRING_INDEX(
+                        GROUP_CONCAT(s.`ip` ORDER BY s.`last_activity` DESC),
+                        ',',
+                        1
+                    ) AS ip
+                FROM `#__user_sessions` s
+                JOIN `#__user` u ON u.`id` = s.`user_id`
+                WHERE s.`last_activity` >= ?
+                GROUP BY u.`id`, u.`user`, u.`email`, u.`name`
+                ORDER BY last_activity DESC",
                 [$since]
             )->rows;
         } catch (Throwable) {

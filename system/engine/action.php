@@ -41,6 +41,7 @@ class Action
         $authSvc = $this->registry->get('user');
         if (!in_array($module, $protected, true)
             && !$authSvc->can('tools.admin.module.index')
+            && !$authSvc->can('all')
             && !$authSvc->can('*')
             && function_exists('get_enabled_module')
             && !get_enabled_module($module)) {

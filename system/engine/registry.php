@@ -124,12 +124,17 @@ final class Registry
 
         $this->resolving[$key] = true;
         try {
-            $value = ($this->bindings[$key]['resolver'])($this);
+            $binding = $this->bindings[$key];
+            $value = $binding['resolver']($this);
         } finally {
             unset($this->resolving[$key]);
         }
 
-        if ($this->bindings[$key]['shared']) {
+        if (
+            $binding['shared'] &&
+            isset($this->bindings[$key]) &&
+            $this->bindings[$key] === $binding
+        ) {
             $this->resolved[$key] = $value;
         }
 

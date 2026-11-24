@@ -51,6 +51,7 @@ final class User
     public ?string $createdAt     = null;
     public ?string $updatedAt     = null;
     public ?string $lastLoginAt   = null;
+    public ?string $lastSeenAt    = null;
 
     /** @var array<int, UserGroup> */
     public array $groups = [];
@@ -94,6 +95,25 @@ final class User
         $registry->factory('auth', $current);
     }
 
+    private static function selectColumns(): string
+    {
+        return '
+            `id`,
+            `email`,
+            `user` AS `username`,
+            `pass` AS `password_hash`,
+            `name` AS `display_name`,
+            `status`,
+            `direct_permissions`,
+            `auth_revision`,
+            `email_verified`,
+            `created_at`,
+            `updated_at`,
+            `last_login_at`,
+            `last_seen_at`
+        ';
+    }
+
     /**
      * Synthetic anonymous user carrying the system `guest` group permissions.
      * Always has id === null so check()/current() still mean "logged in".
@@ -134,10 +154,18 @@ final class User
     // =========================================================================
     // Instance methods — operate on loaded state
     // =========================================================================
-
     public function can(string $permission): bool
     {
-        return UserGroup::permissionMatches($this->permissions, $permission);
+        $permission = strtolower(trim($permission));
+
+        if ($permission === '') {
+            return false;
+        }
+
+        return UserGroup::permissionMatches(
+            $this->permissions,
+            $permission
+        );
     }
 
     /** @param array<int, string> $permissions */
@@ -175,7 +203,7 @@ final class User
             return false;
         }
 
-        if ($this->can('*')
+        if ($this->can('all') || $this->can('*')
             || $this->can($module . '.*')
             || $this->can($module . '.view')
         ) {
@@ -265,9 +293,10 @@ final class User
      */
     public function canAccessAdminUi(): bool
     {
-        if ($this->can('*')) {
+        if ($this->can('all') || $this->can('*')) {
             return true;
         }
+
         if (!function_exists('get_modules')) {
             return false;
         }
@@ -275,17 +304,21 @@ final class User
         foreach (array_keys(get_modules()) as $module) {
             $module = strtolower(trim((string) $module));
             $module = preg_replace('/[^a-z0-9_]/', '', $module) ?? '';
+
             if ($module === '') {
                 continue;
             }
-            if ($this->can($module . '.*') || $this->can($module . '.view') || $this->can($module . '.admin')) {
+
+            if (
+                $this->can($module . '.*') ||
+                $this->can($module . '.view') ||
+                $this->can($module . '.admin')
+            ) {
                 return true;
             }
-            foreach ($this->permissions as $perm) {
-                $perm = (string) $perm;
-                if ($perm === $module . '.admin' || str_starts_with($perm, $module . '.admin.')) {
-                    return true;
-                }
+
+            if ($this->can($module . '.admin.*')) {
+                return true;
             }
         }
 
@@ -523,14 +556,14 @@ final class User
         if ($userId <= 0) {
             return;
         }
-        try {
-            self::db()->query(
-                'UPDATE `#__users` SET `auth_revision` = `auth_revision` + 1 WHERE `id` = ?',
-                [$userId]
-            );
-        } catch (Throwable) {
-            // Column may not exist until migrate.
-        }
+
+        self::db()->query(
+            'UPDATE `#__user`
+            SET `auth_revision` = `auth_revision` + 1
+            WHERE `id` = ?',
+            [$userId]
+        );
+
         // Keep the acting admin signed in when they bump their own revision.
         self::syncSessionAuthRevision();
     }
@@ -540,19 +573,17 @@ final class User
         if ($groupId <= 0) {
             return;
         }
-        try {
-            self::db()->query(
-                'UPDATE `#__users` u
-                   JOIN `#__user_group_members` m ON m.`user_id` = u.`id`
-                   SET u.`auth_revision` = u.`auth_revision` + 1
-                 WHERE m.`group_id` = ?',
-                [$groupId]
-            );
-        } catch (Throwable) {
-            // Column may not exist until migrate.
-        }
-        // Group edits bump every member — including the admin saving the form.
-        // Align this session so they are not force-logged-out on redirect.
+
+        self::db()->query(
+            'UPDATE `#__user` u
+            JOIN `#__user_group_member` m
+                ON m.`user_id` = u.`id`
+            SET u.`auth_revision` = u.`auth_revision` + 1
+            WHERE m.`group_id` = ?',
+            [$groupId]
+        );
+
+        // Refresh the current session's authorization revision.
         self::syncSessionAuthRevision();
     }
 
@@ -564,21 +595,28 @@ final class User
     {
         $rawId = self::session()->get('user_id');
         $id    = is_numeric($rawId) ? (int) $rawId : 0;
+
         if ($id <= 0) {
             return;
         }
-        try {
-            $row = self::db()->query(
-                'SELECT `auth_revision` FROM `#__users` WHERE `id` = ? LIMIT 1',
-                [$id]
-            )->row;
-        } catch (Throwable) {
-            return;
-        }
+
+        $row = self::db()->query(
+            'SELECT `auth_revision`
+            FROM `#__user`
+            WHERE `id` = ?
+            LIMIT 1',
+            [$id]
+        )->row;
+
         if ($row === []) {
             return;
         }
-        self::session()->set(self::SESSION_AUTH_REVISION, (int) ($row['auth_revision'] ?? 1));
+
+        self::session()->set(
+            self::SESSION_AUTH_REVISION,
+            (int) $row['auth_revision']
+        );
+
         self::$current  = null;
         self::$resolved = false;
     }
@@ -665,7 +703,7 @@ final class User
 
     public static function findByUsername(string $username): ?self
     {
-        return self::queryOne('username', strtolower(trim($username)));
+        return self::queryOne('user', strtolower(trim($username)));
     }
 
     /**
@@ -676,7 +714,10 @@ final class User
         $login = strtolower(trim($login));
 
         $row = self::db()->query(
-            "SELECT * FROM `users` WHERE `email` = ? OR `username` = ? LIMIT 1",
+            'SELECT ' . self::selectColumns() . '
+            FROM `#__user`
+            WHERE `email` = ? OR `user` = ?
+            LIMIT 1',
             [$login, $login]
         )->row;
 
@@ -687,7 +728,10 @@ final class User
     public static function all(int $limit = 100, int $offset = 0): array
     {
         $rows = self::db()->query(
-            "SELECT * FROM `users` ORDER BY `id` ASC LIMIT ? OFFSET ?",
+            'SELECT ' . self::selectColumns() . '
+            FROM `#__user`
+            ORDER BY `id` ASC
+            LIMIT ? OFFSET ?',
             [$limit, $offset]
         )->rows;
 
@@ -704,7 +748,9 @@ final class User
 
     public static function count(): int
     {
-        return (int) self::db()->query("SELECT COUNT(*) FROM `users`")->value;
+        return (int) self::db()->query(
+            'SELECT COUNT(*) FROM `#__user`'
+        )->value;
     }
 
     // =========================================================================
@@ -740,14 +786,18 @@ final class User
 
         $db = self::db();
         $emailCanonical = self::canonicalEmail($email);
-        if ($db->exists('users', ['email' => $email])) {
+        if ($db->exists('user', ['email_canonical' => $emailCanonical])) {
             throw new RuntimeException('Email is already registered.');
         }
         try {
             $dup = $db->query(
-                "SELECT `id` FROM `#__users` WHERE `email_canonical` = ? LIMIT 1",
+                'SELECT `id`
+                FROM `#__user`
+                WHERE `email_canonical` = ?
+                LIMIT 1',
                 [$emailCanonical]
             )->row;
+
             if ($dup !== []) {
                 throw new RuntimeException('Email is already registered.');
             }
@@ -756,7 +806,8 @@ final class User
         } catch (\Throwable) {
             // email_canonical column may not exist on older DBs.
         }
-        if ($db->exists('users', ['username' => $username])) {
+
+        if ($db->exists('user', ['user' => $username])) {
             throw new RuntimeException('Username is already taken.');
         }
 
@@ -769,27 +820,28 @@ final class User
 
         return $db->transaction(function (Database $db) use ($email, $emailCanonical, $username, $hash, $data, $now) {
             $payload = [
-                'email'          => $email,
-                'username'       => $username,
-                'password_hash'  => $hash,
-                'display_name'   => (string) ($data['display_name'] ?? ''),
-                'status'         => (string) ($data['status'] ?? 'pending'),
-                'email_verified' => !empty($data['email_verified']) ? 1 : 0,
-                'created_at'     => $now,
-                'updated_at'     => $now,
+                'email'             => $email,
+                'user'              => $username,
+                'pass'              => $hash,
+                'name'              => (string) ($data['display_name'] ?? ''),
+                'status'            => (string) ($data['status'] ?? 'pending'),
+                'email_verified'    => !empty($data['email_verified']) ? 1 : 0,
+                'direct_permissions'=> json_encode([], JSON_THROW_ON_ERROR),
+                'created_at'        => $now,
+                'updated_at'        => $now,
             ];
-            try {
-                $payload['email_canonical'] = $emailCanonical;
-                $id = $db->insert('users', $payload);
-            } catch (\Throwable) {
-                unset($payload['email_canonical']);
-                $id = $db->insert('users', $payload);
-            }
+            $payload['email_canonical'] = $emailCanonical;
+            $id = $db->insert('user', $payload);
 
             foreach ($data['groups'] ?? [self::DEFAULT_GROUP_ID] as $group) {
                 $groupId = is_int($group)
                     ? $group
                     : UserGroup::groupIdByName((string) $group);
+
+                if ($groupId <= 0) {
+                    throw new InvalidArgumentException('Invalid user group.');
+                }
+
                 UserGroup::addUser($id, $groupId);
             }
 
@@ -804,31 +856,51 @@ final class User
             throw new RuntimeException('Cannot save an unsaved User.');
         }
 
-        $payload = [
-            'email'          => $this->email,
-            'username'       => $this->username,
-            'password_hash'  => $this->passwordHash,
-            'display_name'   => $this->displayName,
-            'status'         => $this->status,
-            'email_verified' => $this->emailVerified ? 1 : 0,
-            'updated_at'     => date('Y-m-d H:i:s'),
-        ];
-        try {
-            $payload['email_canonical'] = self::canonicalEmail($this->email);
-            self::db()->update('users', $payload, ['id' => $this->id]);
-        } catch (\Throwable) {
-            unset($payload['email_canonical']);
-            self::db()->update('users', $payload, ['id' => $this->id]);
+        $db = self::db();
+
+        $isCurrentUser = (int) self::session()->get('user_id') === $this->id;
+        if ($isCurrentUser) {
+            if (!$this->isActive()) {
+                self::logout();
+                return;
+            }
+
+            self::$current  = $this;
+            self::$resolved = true;
         }
 
-        // Groups / permissions may have been changed in another process
-        // (e.g. an admin edited this user's role) — reload from DB so the
-        // cached permission set stays accurate.
-        $this->groups      = UserGroup::forUser($this->id);
-        $this->permissions = self::flattenPermissions($this->groups, $this->directPermissions);
+        $db->update('user', [
+            'email'           => $this->email,
+            'email_canonical' => self::canonicalEmail($this->email),
+            'user'            => $this->username,
+            'pass'            => $this->passwordHash,
+            'name'            => $this->displayName,
+            'status'          => $this->status,
+            'email_verified'  => $this->emailVerified ? 1 : 0,
+            'updated_at'      => date('Y-m-d H:i:s'),
+        ], [
+            'id' => $this->id,
+        ]);
 
-        // Refresh the current-user cache if we just saved ourselves.
+        // Refresh authorization revision.
+        self::bumpAuthRevision($this->id);
+        $this->authRevision++;
+
+        // Reload group memberships and permissions.
+        $this->groups = UserGroup::forUser($this->id);
+
+        $this->permissions = self::flattenPermissions(
+            $this->groups,
+            $this->directPermissions
+        );
+
+        // Refresh or invalidate the current-user cache.
         if (self::$current !== null && self::$current->id === $this->id) {
+            if (!$this->isActive()) {
+                self::logout();
+                return;
+            }
+
             self::$current = $this;
         }
     }
@@ -848,76 +920,172 @@ final class User
     public function setPasswordHash(string $hash): void
     {
         $this->passwordHash = $hash;
-        if ($this->id !== null) {
-            self::db()->update('users', [
-                'password_hash' => $hash,
-                'updated_at'    => date('Y-m-d H:i:s'),
-            ], ['id' => $this->id]);
+
+        if ($this->id === null) {
+            return;
         }
+
+        $userId = $this->id;
+
+        // Check whether this is the currently logged-in user.
+        $isCurrentUser = (int) self::session()->get('user_id') === $userId;
+
+        self::db()->update('user', [
+            'pass'       => $hash,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], [
+            'id' => $userId,
+        ]);
+
+        // Increment authorization revision.
+        self::bumpAuthRevision($userId);
+        $this->authRevision++;
+
+        // Revoke all existing sessions.
+        self::sessions()->endAllForUser($userId);
+
+        // Preserve the current session only when changing our own password.
+        if ($isCurrentUser) {
+            self::sessions()->start($userId);
+
+            self::$current  = $this;
+            self::$resolved = true;
+        }
+    }
+
+    public function setDirectPermissions(array $permissions): void
+    {
+        if ($this->id === null) {
+            throw new RuntimeException('Cannot update permissions for an unsaved user.');
+        }
+
+        $permissions = UserGroup::normalisePermissions($permissions);
+
+        self::db()->update('user', [
+            'direct_permissions' => json_encode($permissions, JSON_THROW_ON_ERROR),
+            'updated_at'         => date('Y-m-d H:i:s'),
+        ], [
+            'id' => $this->id,
+        ]);
+
+        User::bumpAuthRevision($this->id);
+
+        $this->directPermissions = $permissions;
+        $this->permissions = self::flattenPermissions($this->groups, $permissions);
+        $this->authRevision++;
     }
 
     public function touchLastLogin(): void
     {
-        if ($this->id === null) return;
-
-        $now = date('Y-m-d H:i:s');
-        $payload = [
-            'last_login_at' => $now,
-            'updated_at'    => $now,
-        ];
-        // last_seen_at added by user_sessions migration — set when present.
-        try {
-            $hasSeen = (int) self::db()->query(
-                "SELECT COUNT(*) FROM information_schema.COLUMNS
-                  WHERE TABLE_SCHEMA = DATABASE()
-                    AND TABLE_NAME = ?
-                    AND COLUMN_NAME = 'last_seen_at'",
-                [str_replace('#__', self::db()->getPrefix(), '#__users')]
-            )->value;
-            if ($hasSeen > 0) {
-                $payload['last_seen_at'] = $now;
-            }
-        } catch (Throwable) {
-            // ignore
+        if ($this->id === null) {
+            return;
         }
 
-        self::db()->update('users', $payload, ['id' => $this->id]);
+        $now = date('Y-m-d H:i:s');
+
+        self::db()->update('user', [
+            'last_login_at' => $now,
+            'last_seen_at'  => $now,
+            'updated_at'    => $now,
+        ], [
+            'id' => $this->id,
+        ]);
 
         $this->lastLoginAt = $now;
     }
 
     public function delete(): void
     {
-        if ($this->id === null) return;
+        if ($this->id === null) {
+            return;
+        }
 
         $id = $this->id;
 
-        self::db()->transaction(function (Database $db) use ($id) {
-            try {
-                $db->query('DELETE FROM `user_sessions` WHERE `user_id` = ?', [$id]);
-            } catch (Throwable) {
-                // table may not exist yet
-            }
-            $db->query('DELETE FROM `user_group_members` WHERE `user_id` = ?', [$id]);
-            $db->query('DELETE FROM `users`             WHERE `id`      = ?', [$id]);
+        $isCurrentUser = (int) self::session()->get('user_id') === $id;
+
+        self::db()->transaction(function (Database $db) use ($id): void {
+
+            $db->query(
+                'DELETE FROM `#__user_sessions`
+                WHERE `user_id` = ?',
+                [$id]
+            );
+
+            $db->query(
+                'DELETE FROM `#__user_group_member`
+                WHERE `user_id` = ?',
+                [$id]
+            );
+
+            $db->query(
+                'DELETE FROM `#__user`
+                WHERE `id` = ?',
+                [$id]
+            );
         });
 
-        if (self::$current !== null && self::$current->id === $id) {
+        if ($isCurrentUser) {
+            self::logout();
+        } elseif (self::$current !== null && self::$current->id === $id) {
             self::$current  = null;
-            self::$resolved = true;
+            self::$resolved = false;
         }
 
         $this->id = null;
     }
 
+    public static function addUser(int $userId, int $groupId): void
+    {
+        if ($userId < 1 || $groupId < 1) {
+            throw new InvalidArgumentException('Invalid user or group ID.');
+        }
+
+        $result = self::db()->query(
+            'INSERT IGNORE INTO `#__user_group_member`
+                (`user_id`, `group_id`)
+            VALUES (?, ?)',
+            [$userId, $groupId]
+        );
+
+        if ($result->affected > 0) {
+            User::bumpAuthRevision($userId);
+        }
+    }
+
+    public static function removeUser(int $userId, int $groupId): void
+    {
+        $result = self::db()->query(
+            'DELETE FROM `#__user_group_member`
+            WHERE `user_id` = ?
+                AND `group_id` = ?',
+            [$userId, $groupId]
+        );
+
+        if ($result->affected > 0) {
+            User::bumpAuthRevision($userId);
+        }
+    }
+
     // =========================================================================
     // Internals
     // =========================================================================
-
     private static function queryOne(string $column, mixed $value): ?self
     {
-        $sql = "SELECT * FROM `users` WHERE `{$column}` = ? LIMIT 1";
-        $row = self::db()->query($sql, [$value])->row;
+        $allowed = ['id', 'email', 'user'];
+
+        if (!in_array($column, $allowed, true)) {
+            throw new InvalidArgumentException('Invalid user lookup column.');
+        }
+
+        $row = self::db()->query(
+            'SELECT ' . self::selectColumns() . "
+            FROM `#__user`
+            WHERE `{$column}` = ?
+            LIMIT 1",
+            [$value]
+        )->row;
+
         return $row !== [] ? self::hydrate($row) : null;
     }
 
@@ -935,9 +1103,10 @@ final class User
         $user->displayName   = (string) ($row['display_name']  ?? '');
         $user->status        = (string) ($row['status']        ?? 'active');
         $user->emailVerified = (bool)   ($row['email_verified'] ?? false);
-        $user->createdAt     = $row['created_at']    ?? null;
-        $user->updatedAt     = $row['updated_at']    ?? null;
-        $user->lastLoginAt   = $row['last_login_at'] ?? null;
+        $user->createdAt   = $row['created_at']    ?? null;
+        $user->updatedAt   = $row['updated_at']    ?? null;
+        $user->lastLoginAt = $row['last_login_at'] ?? null;
+        $user->lastSeenAt  = $row['last_seen_at']  ?? null;
         $user->groups        = $groups;
 
         $direct = [];

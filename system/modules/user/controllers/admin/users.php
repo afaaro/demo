@@ -56,7 +56,7 @@ class UserAdminUsers extends Controller
                 $dir = $state['dir'] === 'asc' ? 'ASC' : 'DESC';
 
                 $total = (int) ($db->query(
-                    "SELECT COUNT(DISTINCT u.id) AS total FROM `#__users` u{$whereSql}",
+                    "SELECT COUNT(DISTINCT u.id) AS total FROM `#__user` u{$whereSql}",
                     $params
                 )->row['total'] ?? 0);
 
@@ -67,9 +67,9 @@ class UserAdminUsers extends Controller
                 $rows = $db->query(
                     "SELECT u.*,
                             GROUP_CONCAT(g.name SEPARATOR ', ') AS `groups`
-                       FROM `#__users` u
-                       LEFT JOIN `#__user_group_members` m ON u.id = m.user_id
-                       LEFT JOIN `#__user_groups` g ON m.group_id = g.id
+                       FROM `#__user` u
+                       LEFT JOIN `#__user_group_member` m ON u.id = m.user_id
+                       LEFT JOIN `#__user_group` g ON m.group_id = g.id
                       {$whereSql}
                       GROUP BY u.id
                       ORDER BY u.`{$sortCol}` {$dir}
@@ -164,7 +164,7 @@ class UserAdminUsers extends Controller
             $this->view->block('right_sidebar', 'Users');
 
             $pendingCount = (int) $this->db->query(
-                "SELECT COUNT(*) FROM `#__users` WHERE `status` = 'pending'"
+                "SELECT COUNT(*) FROM `#__user` WHERE `status` = 'pending'"
             )->value;
             $onlineCount = count($onlineUsers);
 
@@ -257,7 +257,7 @@ class UserAdminUsers extends Controller
     public function addAction(): void
     {
         $groups = $this->db->query(
-            "SELECT * FROM `#__user_groups` ORDER BY name"
+            "SELECT * FROM `#__user_group` ORDER BY name"
         )->rows;
 
         $old = [
@@ -297,7 +297,7 @@ class UserAdminUsers extends Controller
 
             if ($errors === []) {
                 $exists = $this->db->query(
-                    "SELECT id FROM `#__users` WHERE username = ? OR email = ? LIMIT 1",
+                    "SELECT id FROM `#__user` WHERE username = ? OR email = ? LIMIT 1",
                     [$old['username'], $old['email']]
                 )->row;
 
@@ -482,7 +482,7 @@ class UserAdminUsers extends Controller
         $id = (int) $this->request->get('id', 'int', 0);
 
         $user = $this->db->query(
-            "SELECT * FROM `#__users` WHERE `id` = ? LIMIT 1",
+            "SELECT * FROM `#__user` WHERE `id` = ? LIMIT 1",
             [$id]
         )->row;
 
@@ -496,8 +496,8 @@ class UserAdminUsers extends Controller
         $groups = $this->db->query(
             "SELECT g.*,
                     CASE WHEN m.group_id IS NOT NULL THEN 1 ELSE 0 END AS selected
-            FROM `#__user_groups` g
-            LEFT JOIN `#__user_group_members` m
+            FROM `#__user_group` g
+            LEFT JOIN `#__user_group_member` m
                     ON g.id = m.group_id AND m.user_id = ?
             ORDER BY g.name",
             [$id]
@@ -582,12 +582,12 @@ class UserAdminUsers extends Controller
                 $this->db->transaction(function ($db) use ($id, $update, $groupIds) {
                     $db->update('users', $update, ['id' => $id]);
 
-                    $db->query('DELETE FROM `#__user_group_members` WHERE `user_id` = ?', [$id]);
+                    $db->query('DELETE FROM `#__user_group_member` WHERE `user_id` = ?', [$id]);
 
                     foreach (array_unique(array_map('intval', $groupIds)) as $groupId) {
                         if ($groupId > 0) {
                             $db->query(
-                                'INSERT INTO `#__user_group_members` (`user_id`, `group_id`) VALUES (?, ?)',
+                                'INSERT INTO `#__user_group_member` (`user_id`, `group_id`) VALUES (?, ?)',
                                 [$id, $groupId]
                             );
                         }
@@ -616,15 +616,15 @@ class UserAdminUsers extends Controller
 
             // Refresh $user and $groups so the form shows the latest state.
             $user = $this->db->query(
-                "SELECT * FROM `#__users` WHERE `id` = ? LIMIT 1",
+                "SELECT * FROM `#__user` WHERE `id` = ? LIMIT 1",
                 [$id]
             )->row;
 
             $groups = $this->db->query(
                 "SELECT g.*,
                         CASE WHEN m.group_id IS NOT NULL THEN 1 ELSE 0 END AS selected
-                FROM `#__user_groups` g
-                LEFT JOIN `#__user_group_members` m
+                FROM `#__user_group` g
+                LEFT JOIN `#__user_group_member` m
                         ON g.id = m.group_id AND m.user_id = ?
                 ORDER BY g.name",
                 [$id]
@@ -811,9 +811,9 @@ class UserAdminUsers extends Controller
         $users = $this->db->query(
             "SELECT u.*,
                     GROUP_CONCAT(g.name SEPARATOR ', ') AS `groups`
-               FROM `#__users` u
-               LEFT JOIN `#__user_group_members` m ON u.id = m.user_id
-               LEFT JOIN `#__user_groups` g ON m.group_id = g.id
+               FROM `#__user` u
+               LEFT JOIN `#__user_group_member` m ON u.id = m.user_id
+               LEFT JOIN `#__user_group` g ON m.group_id = g.id
               WHERE u.`status` = 'pending'
               GROUP BY u.id
               ORDER BY u.created_at ASC"
@@ -964,7 +964,7 @@ JS;
 
         $row = $this->db->query(
             "SELECT `id`, `email`, `display_name`, `username`, `status`
-               FROM `#__users` WHERE `id` = ? LIMIT 1",
+               FROM `#__user` WHERE `id` = ? LIMIT 1",
             [$id]
         )->row;
 
@@ -980,7 +980,7 @@ JS;
             (string) (($row['display_name'] ?? '') ?: $row['username'])
         );
 
-        $this->db->query('DELETE FROM `#__users` WHERE `id` = ? AND `status` = ?', [$id, 'pending']);
+        $this->db->query('DELETE FROM `#__user` WHERE `id` = ? AND `status` = ?', [$id, 'pending']);
         $this->notify->success('Registration rejected and removed.');
         redirect_to('user/admin/users/pending');
     }
@@ -995,7 +995,7 @@ JS;
                 continue;
             }
             $row = $this->db->query(
-                "SELECT `id` FROM `#__users` WHERE `id` = ? AND `status` = 'pending' LIMIT 1",
+                "SELECT `id` FROM `#__user` WHERE `id` = ? AND `status` = 'pending' LIMIT 1",
                 [$id]
             )->row;
             if ($row === []) {
@@ -1063,8 +1063,8 @@ JS;
             } catch (\Throwable) {
                 // table may not exist yet
             }
-            $db->query('DELETE FROM `#__user_group_members` WHERE `user_id` = ?', [$id]);
-            $db->query('DELETE FROM `#__users`             WHERE `id`      = ?', [$id]);
+            $db->query('DELETE FROM `#__user_group_member` WHERE `user_id` = ?', [$id]);
+            $db->query('DELETE FROM `#__user`             WHERE `id`      = ?', [$id]);
         });
 
         $this->notify->success('User deleted.');

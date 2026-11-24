@@ -46,7 +46,7 @@ class UserAdminGroups extends Controller
                     : "g.`{$sortCol}`";
 
                 $total = (int) ($db->query(
-                    "SELECT COUNT(*) AS total FROM `#__user_groups` g{$whereSql}",
+                    "SELECT COUNT(*) AS total FROM `#__user_group` g{$whereSql}",
                     $params
                 )->row['total'] ?? 0);
 
@@ -56,8 +56,8 @@ class UserAdminGroups extends Controller
 
                 $rows = $db->query(
                     "SELECT g.*, COUNT(DISTINCT m.user_id) AS member_count
-                       FROM `#__user_groups` g
-                       LEFT JOIN `#__user_group_members` m ON m.group_id = g.id
+                       FROM `#__user_group` g
+                       LEFT JOIN `#__user_group_member` m ON m.group_id = g.id
                       {$whereSql}
                       GROUP BY g.id
                       ORDER BY {$orderExpr} {$dir}
@@ -194,13 +194,13 @@ class UserAdminGroups extends Controller
             } elseif ($this->groupNameExists($old['name'])) {
                 $this->notify->error('A group with this name already exists.');
             } else {
-                $this->db->insert('user_groups', [
+                UserGroup::create([
                     'name'        => $old['name'],
                     'label'       => $old['label'] !== '' ? $old['label'] : $old['name'],
                     'description' => $old['description'],
                     'is_system'   => $old['is_system'] ? 1 : 0,
                     'level'       => $old['level'],
-                    'permissions' => '[]',
+                    'permissions' => [],
                 ]);
 
                 $this->notify->success('Group created successfully.');
@@ -280,10 +280,7 @@ class UserAdminGroups extends Controller
     {
         $id = (int) $this->request->get('id', 'int', 0);
 
-        $group = $this->db->query(
-            "SELECT * FROM #__user_groups WHERE id = ?",
-            [$id]
-        )->row;
+        $group = UserGroup::find($id)?->toArray() ?? [];
 
         if ($group === []) {
             $this->notify->error('Group not found.');
@@ -291,13 +288,7 @@ class UserAdminGroups extends Controller
             return;
         }
 
-        $currentPerms = [];
-        if (!empty($group['permissions'])) {
-            $decoded = json_decode((string) $group['permissions'], true);
-            if (is_array($decoded)) {
-                $currentPerms = array_values(array_filter($decoded, 'is_string'));
-            }
-        }
+        $currentPerms = $group['permissions'] ?? [];
 
         $isSuperGroup = (int) ($group['level'] ?? 0) === User::USER_LEVEL_SUPER_ADMIN;
         $nameLocked = $this->isLockedSystemGroupName((string) ($group['name'] ?? ''));
@@ -315,10 +306,14 @@ class UserAdminGroups extends Controller
             $fromTextarea = preg_split('/[\s,]+/', $manual, -1, PREG_SPLIT_NO_EMPTY) ?: [];
             $permsInput = array_merge($permsInput, $fromTextarea);
 
-            $permissions = array_values(array_unique(array_filter(
-                array_map('trim', array_map('strval', $permsInput)),
-                fn($p) => $p !== '' && preg_match('/^(\*|[a-z0-9_]+(\.[a-z0-9_]+)*(\.\*)?)$/i', $p)
-            )));
+            $permissionsValid = true;
+            try {
+                $permissions = UserGroup::normalisePermissions($permsInput);
+            } catch (InvalidArgumentException $e) {
+                $this->notify->error($e->getMessage());
+                $permissions = $currentPerms;
+                $permissionsValid = false;
+            }
 
             if ($isSuperGroup) {
                 $isSystem = 1;
@@ -329,28 +324,57 @@ class UserAdminGroups extends Controller
                 $isSystem = 1;
             }
 
-            if (!preg_match('/^[a-z0-9_]{2,64}$/', $name)) {
+            if (!$permissionsValid) {
+                // Keep the form open so the user can correct the permissions.
+            } elseif (!preg_match('/^[a-z0-9_]{2,64}$/', $name)) {
                 $this->notify->error('Name must be 2–64 characters: lowercase letters, numbers, underscore.');
             } elseif ($this->groupNameExists($name, $id)) {
                 $this->notify->error('A group with this name already exists.');
             } else {
-                $beforePerms = $currentPerms;
-                $beforeLevel = (int) ($group['level'] ?? 0);
-                $permsChanged = $beforePerms !== $permissions || $beforeLevel !== $level;
+                $beforePerms = UserGroup::normalisePermissions($currentPerms);
+                $afterPerms  = UserGroup::normalisePermissions($permissions);
 
-                $this->db->update('user_groups', [
-                    'name'        => $name,
-                    'label'       => $label !== '' ? $label : $name,
-                    'description' => $description,
-                    'is_system'   => $isSystem ? 1 : 0,
-                    'level'       => $level,
-                    'permissions' => json_encode($permissions, JSON_UNESCAPED_SLASHES),
-                ], ['id' => $id]);
+                sort($beforePerms);
+                sort($afterPerms);
+
+                $beforeLevel = (int) ($group['level'] ?? 0);
+                $permsChanged = $beforePerms !== $afterPerms || $beforeLevel !== $level;
+
+                $this->db->transaction(function ($db) use (
+                    $id,
+                    $name,
+                    $label,
+                    $description,
+                    $isSystem,
+                    $level,
+                    $permissions
+                ): void {
+                    $db->update('user_group', [
+                        'name'        => $name,
+                        'label'       => $label !== '' ? $label : $name,
+                        'description' => $description,
+                        'is_system'   => $isSystem ? 1 : 0,
+                        'level'       => $level,
+                    ], ['id' => $id]);
+
+                    $db->query(
+                        'INSERT INTO `#__user_permission`
+                            (`user_group_id`, `permission`)
+                        VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE
+                            `permission` = VALUES(`permission`)',
+                        [
+                            $id,
+                            json_encode($permissions, JSON_UNESCAPED_SLASHES),
+                        ]
+                    );
+                });
 
                 // Only invalidate sessions when privileges actually changed.
                 if ($permsChanged) {
                     User::bumpAuthRevisionForGroup($id);
                 }
+
                 (new UserAuthAudit($this->db))->log(
                     'group.permissions_updated',
                     'Updated group ' . $name,
@@ -376,11 +400,11 @@ class UserAdminGroups extends Controller
         }
 
         $members = $this->db->query(
-            "SELECT u.id, u.username, u.email, u.status
-               FROM #__user_group_members m
-               JOIN #__users u ON m.user_id = u.id
+            "SELECT u.id, u.user, u.email, u.status
+               FROM #__user_group_member m
+               JOIN #__user u ON m.user_id = u.id
               WHERE m.group_id = ?
-              ORDER BY u.username",
+              ORDER BY u.user",
             [$id]
         )->rows;
 
@@ -600,7 +624,7 @@ class UserAdminGroups extends Controller
                 echo '<input type="hidden" name="group_id" value="' . $id . '">';
                 echo '<div class="col-md-6"><label class="form-label small">Add member</label>'
                    . '<input type="text" name="login" class="form-control" required'
-                   . ' placeholder="Username or email" autocomplete="off"></div>';
+                   . ' placeholder="user or email" autocomplete="off"></div>';
                 echo '<div class="col-auto"><button type="submit" class="btn btn-primary">Add to group</button></div>';
                 echo '</form>';
 
@@ -613,7 +637,7 @@ class UserAdminGroups extends Controller
                         $status = (string) ($m['status'] ?? '');
                         echo '<li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">';
                         echo '<span>';
-                        echo $this->view->e((string) $m['username']);
+                        echo $this->view->e((string) $m['user']);
                         echo ' <span class="text-muted small">&lt;'
                            . $this->view->e((string) $m['email']) . '&gt;</span>';
                         if ($status !== '' && $status !== 'active') {
@@ -766,10 +790,7 @@ class UserAdminGroups extends Controller
         }
 
         $id = (int) $this->request->post('id', 'int', 0);
-        $group = $this->db->query(
-            "SELECT * FROM #__user_groups WHERE id = ?",
-            [$id]
-        )->row;
+        $group = UserGroup::find($id)?->toArray() ?? [];
 
         if ($group === []) {
             $this->notify->error('Group not found.');
@@ -791,13 +812,16 @@ class UserAdminGroups extends Controller
             }
         }
 
-        $newId = (int) $this->db->insert('user_groups', [
+        $newGroup = UserGroup::create([
             'name'        => $newName,
-            'label'       => trim((string) ($group['label'] ?? $group['name'])) . ' (copy)',
+            'label'       => trim((string) ($group['label'] ?? '')) ?: $newName,
             'description' => (string) ($group['description'] ?? ''),
             'is_system'   => 0,
-            'permissions' => (string) ($group['permissions'] ?? '[]'),
+            'level'       => 0,
+            'permissions' => $group['permissions'] ?? [],
         ]);
+
+        $newId = (int) $newGroup->id;
 
         $this->notify->success("Cloned as '{$newName}'. Members were not copied.");
         redirect_to('user/admin/groups/edit', ['id' => $newId]);
@@ -821,7 +845,7 @@ class UserAdminGroups extends Controller
         $login = trim((string) $this->request->post('login', 'string', ''));
 
         $group = $this->db->query(
-            "SELECT id, name FROM #__user_groups WHERE id = ? LIMIT 1",
+            "SELECT id, name FROM #__user_group WHERE id = ? LIMIT 1",
             [$groupId]
         )->row;
         if ($group === []) {
@@ -837,7 +861,7 @@ class UserAdminGroups extends Controller
         }
 
         if ($login === '') {
-            $this->notify->error('Enter a username or email.');
+            $this->notify->error('Enter a user or email.');
             redirect_to('user/admin/groups/edit', ['id' => $groupId]);
             return;
         }
@@ -850,7 +874,7 @@ class UserAdminGroups extends Controller
         }
 
         $exists = $this->db->query(
-            "SELECT 1 FROM #__user_group_members WHERE user_id = ? AND group_id = ? LIMIT 1",
+            "SELECT 1 FROM #__user_group_member WHERE user_id = ? AND group_id = ? LIMIT 1",
             [(int) $user->id, $groupId]
         )->row;
         if ($exists !== []) {
@@ -860,15 +884,15 @@ class UserAdminGroups extends Controller
         }
 
         UserGroup::addUser((int) $user->id, $groupId);
-        User::bumpAuthRevision((int) $user->id);
+
         (new UserAuthAudit($this->db))->log(
             'group.member_added',
-            'Added ' . $user->username . ' to group',
+            'Added ' . $user->user . ' to group',
             $this->auth->id(),
             (int) $user->id,
             $groupId,
         );
-        $this->notify->success('Added ' . $user->username . ' to the group.');
+        $this->notify->success('Added ' . $user->user . ' to the group.');
         redirect_to('user/admin/groups/edit', ['id' => $groupId]);
     }
 
@@ -890,7 +914,7 @@ class UserAdminGroups extends Controller
         $userId  = (int) $this->request->post('user_id', 'int', 0);
 
         $group = $this->db->query(
-            "SELECT id, name, level FROM #__user_groups WHERE id = ? LIMIT 1",
+            "SELECT id, name, level FROM #__user_group WHERE id = ? LIMIT 1",
             [$groupId]
         )->row;
         if ($group === [] || $userId <= 0) {
@@ -915,7 +939,7 @@ class UserAdminGroups extends Controller
         }
 
         UserGroup::removeUser($userId, $groupId);
-        User::bumpAuthRevision($userId);
+
         (new UserAuthAudit($this->db))->log(
             'group.member_removed',
             'Removed user from group',
@@ -933,31 +957,31 @@ class UserAdminGroups extends Controller
             redirect_to('user/admin/groups');
             return;
         }
+        try {
+            $this->request->checkToken();
+        } catch (\RuntimeException) {
+            $this->notify->error('Session expired.');
+            redirect_to('user/admin/groups');
+            return;
+        }
 
         $id = (int) $this->request->post('id', 'int', 0);
 
-        $group = $this->db->query(
-            "SELECT * FROM #__user_groups WHERE id = ?",
-            [$id]
-        )->row;
+        $group = UserGroup::find($id);
 
-        if ($group === []) {
+        if ($group === null) {
             $this->notify->error('Group not found.');
             redirect_to('user/admin/groups');
             return;
         }
 
-        if (!empty($group['is_system'])) {
-            $this->notify->error('System groups cannot be deleted.');
+        try {
+            $group->delete();
+        } catch (\RuntimeException $e) {
+            $this->notify->error($e->getMessage());
             redirect_to('user/admin/groups');
             return;
         }
-
-        User::bumpAuthRevisionForGroup($id);
-        $this->db->transaction(function ($db) use ($id) {
-            $db->query('DELETE FROM #__user_group_members WHERE group_id = ?', [$id]);
-            $db->query('DELETE FROM #__user_groups        WHERE id       = ?', [$id]);
-        });
 
         $this->notify->success('Group deleted successfully.');
         redirect_to('user/admin/groups');
@@ -1024,14 +1048,14 @@ class UserAdminGroups extends Controller
     {
         if ($exceptId === null) {
             $row = $this->db->query(
-                "SELECT id FROM #__user_groups WHERE name = ? LIMIT 1",
+                "SELECT id FROM #__user_group WHERE name = ? LIMIT 1",
                 [$name]
             )->row;
             return $row !== [];
         }
 
         $row = $this->db->query(
-            "SELECT id FROM #__user_groups WHERE name = ? AND id != ? LIMIT 1",
+            "SELECT id FROM #__user_group WHERE name = ? AND id != ? LIMIT 1",
             [$name, $exceptId]
         )->row;
         return $row !== [];

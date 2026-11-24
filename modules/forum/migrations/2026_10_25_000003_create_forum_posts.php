@@ -21,7 +21,7 @@ return [
                 KEY `idx_post_thread` (`thread_id`, `created_at`),
                 KEY `idx_post_user` (`user_id`),
                 CONSTRAINT `fk_post_thread` FOREIGN KEY (`thread_id`) REFERENCES `#__forum_threads`(`id`) ON DELETE CASCADE,
-                CONSTRAINT `fk_post_user`   FOREIGN KEY (`user_id`)   REFERENCES `#__users`(`id`) ON DELETE RESTRICT
+                CONSTRAINT `fk_post_user`   FOREIGN KEY (`user_id`)   REFERENCES `#__user`(`id`) ON DELETE RESTRICT
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
     },

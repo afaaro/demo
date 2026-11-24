@@ -195,12 +195,12 @@ final class PageAccessService
             )->rows;
 
             $topUsers = $this->db->query(
-                "SELECT l.`user_id`, u.`username`, u.`display_name`, COUNT(*) AS hits
+                "SELECT l.`user_id`, u.`user`, u.`display_name`, COUNT(*) AS hits
                    FROM `#__page_access_log` l
-                   JOIN `#__users` u ON u.`id` = l.`user_id`
+                   JOIN `#__user` u ON u.`id` = l.`user_id`
                   WHERE l.`created_at` >= ?
                     AND l.`user_id` IS NOT NULL
-                  GROUP BY l.`user_id`, u.`username`, u.`display_name`
+                  GROUP BY l.`user_id`, u.`user`, u.`display_name`
                   ORDER BY hits DESC
                   LIMIT 15",
                 [$since . ' 00:00:00']
@@ -208,9 +208,9 @@ final class PageAccessService
 
             $recent = $this->db->query(
                 "SELECT l.`created_at`, l.`route`, l.`path`, l.`ip`,
-                        COALESCE(u.`username`, 'guest') AS username
+                        COALESCE(u.`user`, 'guest') AS username
                    FROM `#__page_access_log` l
-                   LEFT JOIN `#__users` u ON u.`id` = l.`user_id`
+                   LEFT JOIN `#__user` u ON u.`id` = l.`user_id`
                   ORDER BY l.`id` DESC
                   LIMIT 40"
             )->rows;
@@ -240,7 +240,7 @@ final class PageAccessService
             ], $byModule),
             'top_users' => array_map(static fn(array $r): array => [
                 'user_id'      => (int) $r['user_id'],
-                'username'     => (string) $r['username'],
+                'username'     => (string) $r['user'],
                 'display_name' => (string) ($r['display_name'] ?? ''),
                 'hits'         => (int) $r['hits'],
             ], $topUsers),
@@ -248,7 +248,7 @@ final class PageAccessService
                 'created_at' => (string) $r['created_at'],
                 'route'      => (string) $r['route'],
                 'path'       => (string) $r['path'],
-                'username'   => (string) $r['username'],
+                'username'   => (string) $r['user'],
                 'ip'         => (string) $r['ip'],
             ], $recent),
         ];

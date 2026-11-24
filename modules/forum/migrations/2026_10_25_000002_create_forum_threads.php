@@ -27,7 +27,7 @@ return [
                 KEY `idx_thread_cat_pinned` (`category_id`, `is_pinned`, `last_post_at`),
                 KEY `idx_thread_user` (`user_id`),
                 CONSTRAINT `fk_thread_cat`  FOREIGN KEY (`category_id`) REFERENCES `#__forum_categories`(`id`) ON DELETE CASCADE,
-                CONSTRAINT `fk_thread_user` FOREIGN KEY (`user_id`)     REFERENCES `#__users`(`id`) ON DELETE RESTRICT
+                CONSTRAINT `fk_thread_user` FOREIGN KEY (`user_id`)     REFERENCES `#__user`(`id`) ON DELETE RESTRICT
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ");
     },
