@@ -606,10 +606,10 @@ final class NewsRepository
     private function articleSelect(): string
     {
         return "SELECT n.*, c.`name` AS category_name, c.`slug` AS category_slug,
-                       NULLIF(TRIM(COALESCE(NULLIF(u.`display_name`, ''), u.`username`)), '') AS author_name
+                       NULLIF(TRIM(COALESCE(NULLIF(u.`name`, ''), u.`user`)), '') AS author_name
                   FROM `#__news` n
                   LEFT JOIN `#__news_categories` c ON c.`id` = n.`category_id`
-                  LEFT JOIN `users` u ON u.`id` = n.`author_id`";
+                  LEFT JOIN `user` u ON u.`id` = n.`author_id`";
     }
 
     /** @param list<int|string> $ids @return list<int> */

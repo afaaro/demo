@@ -93,14 +93,14 @@ class CommunityProfile extends Controller
     {
         if (ctype_digit($u)) {
             $row = $this->db->query(
-                "SELECT `id`, `username`, `display_name`, `status`, `created_at`
-                   FROM `#__users` WHERE `id` = ? LIMIT 1",
+                "SELECT `id`, `user`, `name`, `status`, `created_at`
+                   FROM `#__user` WHERE `id` = ? LIMIT 1",
                 [(int) $u]
             )->row;
         } else {
             $row = $this->db->query(
-                "SELECT `id`, `username`, `display_name`, `status`, `created_at`
-                   FROM `#__users` WHERE `username` = ? LIMIT 1",
+                "SELECT `id`, `user`, `name`, `status`, `created_at`
+                   FROM `#__user` WHERE `username` = ? LIMIT 1",
                 [strtolower($u)]
             )->row;
         }

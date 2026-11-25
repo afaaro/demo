@@ -17,11 +17,11 @@ final class PostRepository
         }
         $row = $this->db->query(
             "SELECT p.*,
-                    u.`username`,
-                    u.`display_name`,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                    u.`user`,
+                    u.`name`,
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE p.`id` = ?
               LIMIT 1",
             [$id]
@@ -65,11 +65,11 @@ final class PostRepository
         $placeholders = implode(',', array_fill(0, count($authorIds), '?'));
         $rows = $this->db->query(
             "SELECT p.*,
-                    u.`username`,
-                    u.`display_name`,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                    u.`user`,
+                    u.`name`,
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE p.`status` = 'visible'
                 AND p.`user_id` IN ({$placeholders})
                 AND p.`visibility` IN ('friends', 'public')
@@ -102,11 +102,11 @@ final class PostRepository
         }
         $rows = $this->db->query(
             "SELECT p.*,
-                    u.`username`,
-                    u.`display_name`,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                    u.`user`,
+                    u.`name`,
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE p.`status` = 'visible'
                 AND p.`visibility` = 'public'
                 {$excludeSql}
@@ -174,11 +174,11 @@ final class PostRepository
 
         $rows = $this->db->query(
             "SELECT p.*,
-                    u.`username`,
-                    u.`display_name`,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                    u.`user`,
+                    u.`name`,
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE p.`status` = 'visible'
                 AND p.`user_id` = ?
                 AND {$visibilitySql}
@@ -213,17 +213,17 @@ final class PostRepository
         $total = (int) $this->db->query(
             "SELECT COUNT(*)
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE {$sqlWhere}",
             $params
         )->value;
 
         $rows = $this->db->query(
             "SELECT p.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name,
-                    u.`username`
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name,
+                    u.`user`
                FROM `#__community_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE {$sqlWhere}
               ORDER BY p.`created_at` DESC, p.`id` DESC
               LIMIT {$limit} OFFSET {$offset}",

@@ -56,12 +56,12 @@ class ForumThread extends Controller
 
         $posts = $this->db->query(
             "SELECT p.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`) AS username,
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`) AS username,
                     u.`created_at` AS author_joined,
                     (SELECT COUNT(*) FROM `#__forum_posts` x
                       WHERE x.`user_id` = p.`user_id` AND x.`is_deleted` = 0) AS author_posts
                FROM `#__forum_posts` p
-               LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
               WHERE p.`thread_id` = ? AND p.`is_deleted` = 0
               ORDER BY p.`created_at` ASC, p.`id` ASC
               LIMIT {$pager->perPage} OFFSET {$pager->offset}",
@@ -82,9 +82,9 @@ class ForumThread extends Controller
             }
             if ($quote === '') {
                 $quoted = $this->db->query(
-                    "SELECT p.`content`, COALESCE(NULLIF(u.`display_name`, ''), u.`username`) AS username
+                    "SELECT p.`content`, COALESCE(NULLIF(u.`name`, ''), u.`user`) AS username
                        FROM `#__forum_posts` p
-                       LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+                       LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
                       WHERE p.`id` = ? AND p.`thread_id` = ? AND p.`is_deleted` = 0
                       LIMIT 1",
                     [$quoteId, $id]

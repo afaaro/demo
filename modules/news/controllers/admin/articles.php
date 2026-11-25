@@ -651,7 +651,7 @@ class NewsAdminArticles extends Controller
             'tags'         => trim((string) $this->request->post('tags', 'string', '')),
             'source'       => trim((string) $this->request->post('source', 'string', '')),
             'source_url'   => trim((string) $this->request->post('source_url', 'string', '')),
-            'status'       => (string) $this->request->post('status', 'string', 'draft'),
+            'status'       => (string) $this->request->post('status', 'string', 'published'),
             'featured'     => (int) $this->request->post('featured', 'int', 0) === 1,
             'author_id'    => (int) $this->request->post('author_id', 'int', 0),
             'published_at' => trim((string) $this->request->post('published_at', 'string', '')),
@@ -1305,10 +1305,10 @@ HTML;
     {
         try {
             $rows = $this->db->query(
-                "SELECT `id`, `display_name`, `username`
-                   FROM `users`
+                "SELECT `id`, `name`, `user`
+                   FROM `user`
                   WHERE `status` = 'active'
-                  ORDER BY `display_name`, `username`"
+                  ORDER BY `name`, `user`"
             )->rows;
         } catch (\Throwable) {
             return [];
@@ -1316,9 +1316,9 @@ HTML;
 
         $out = ['0' => '— Unassigned —'];
         foreach ($rows as $r) {
-            $label = trim((string) ($r['display_name'] ?? ''));
+            $label = trim((string) ($r['name'] ?? ''));
             if ($label === '') {
-                $label = (string) ($r['username'] ?? '');
+                $label = (string) ($r['user'] ?? '');
             }
             if ($label === '') {
                 $label = 'User #' . (int) $r['id'];

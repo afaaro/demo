@@ -150,12 +150,12 @@ class CommunityFriends extends Controller
         }
         $like = '%' . $q . '%';
         return $this->db->query(
-            "SELECT `id`, `username`, `display_name`
-               FROM `#__users`
+            "SELECT `id`, `user`, `name`
+               FROM `#__user`
               WHERE `status` = 'active'
                 AND `id` <> ?
-                AND (`username` LIKE ? OR `display_name` LIKE ?)
-              ORDER BY `username`
+                AND (`user` LIKE ? OR `name` LIKE ?)
+              ORDER BY `user`
               LIMIT 20",
             [$excludeId, $like, $like]
         )->rows;

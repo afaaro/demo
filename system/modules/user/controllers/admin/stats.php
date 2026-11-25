@@ -128,9 +128,9 @@ class UserAdminStats extends Controller
                 echo '<tr><td colspan="2" class="text-muted px-3 py-3">No signed-in views yet.</td></tr>';
             } else {
                 foreach ($report['top_users'] as $row) {
-                    $label = $row['username'];
-                    if ($row['display_name'] !== '') {
-                        $label .= ' · ' . $row['display_name'];
+                    $label = $row['user'];
+                    if ($row['name'] !== '') {
+                        $label .= ' · ' . $row['name'];
                     }
                     echo '<tr><td class="px-3">' . $e($label) . '</td>'
                        . '<td class="text-end fw-semibold px-3">' . (int) $row['hits'] . '</td></tr>';

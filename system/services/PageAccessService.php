@@ -195,12 +195,12 @@ final class PageAccessService
             )->rows;
 
             $topUsers = $this->db->query(
-                "SELECT l.`user_id`, u.`user`, u.`display_name`, COUNT(*) AS hits
+                "SELECT l.`user_id`, u.`user`, u.`name`, COUNT(*) AS hits
                    FROM `#__page_access_log` l
                    JOIN `#__user` u ON u.`id` = l.`user_id`
                   WHERE l.`created_at` >= ?
                     AND l.`user_id` IS NOT NULL
-                  GROUP BY l.`user_id`, u.`user`, u.`display_name`
+                  GROUP BY l.`user_id`, u.`user`, u.`name`
                   ORDER BY hits DESC
                   LIMIT 15",
                 [$since . ' 00:00:00']

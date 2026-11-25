@@ -74,10 +74,10 @@ final class NotificationRepository
         $limit = max(1, min(100, $limit));
         return $this->db->query(
             "SELECT n.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS actor_name,
-                    u.`username` AS actor_username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS actor_name,
+                    u.`user` AS actor_username
                FROM `#__community_notifications` n
-               LEFT JOIN `#__users` u ON u.`id` = n.`actor_id`
+               LEFT JOIN `#__user` u ON u.`id` = n.`actor_id`
               WHERE n.`user_id` = ?
               ORDER BY n.`created_at` DESC, n.`id` DESC
               LIMIT {$limit}",

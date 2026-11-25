@@ -156,11 +156,11 @@ final class FriendshipRepository
         $slice = array_slice($mutual, 0, $limit);
         $placeholders = implode(',', array_fill(0, count($slice), '?'));
         return $this->db->query(
-            "SELECT u.`id`, u.`username`, u.`display_name`
-               FROM `#__users` u
+            "SELECT u.`id`, u.`user`, u.`name`
+               FROM `#__user` u
               WHERE u.`id` IN ({$placeholders})
                 AND u.`status` = 'active'
-              ORDER BY COALESCE(NULLIF(u.`display_name`, ''), u.`username`)
+              ORDER BY COALESCE(NULLIF(u.`name`, ''), u.`user`)
               LIMIT {$limit}",
             $slice
         )->rows;
@@ -190,10 +190,10 @@ final class FriendshipRepository
         }
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         return $this->db->query(
-            "SELECT u.`id`, u.`username`, u.`display_name`
-               FROM `#__users` u
+            "SELECT u.`id`, u.`user`, u.`name`
+               FROM `#__user` u
               WHERE u.`id` IN ({$placeholders})
-              ORDER BY COALESCE(NULLIF(u.`display_name`, ''), u.`username`)",
+              ORDER BY COALESCE(NULLIF(u.`name`, ''), u.`user`)",
             $ids
         )->rows;
     }
@@ -206,10 +206,10 @@ final class FriendshipRepository
         $limit = max(1, min(500, $limit));
         return $this->db->query(
             "SELECT f.*,
-                    u.`username`,
-                    u.`display_name`
+                    u.`user`,
+                    u.`name`
                FROM `#__community_friendships` f
-               INNER JOIN `#__users` u ON u.`id` = f.`requested_by`
+               INNER JOIN `#__user` u ON u.`id` = f.`requested_by`
               WHERE f.`status` = 'pending'
                 AND f.`requested_by` <> ?
                 AND (f.`user_id` = ? OR f.`friend_id` = ?)
@@ -253,8 +253,8 @@ final class FriendshipRepository
         }
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $users = $this->db->query(
-            "SELECT `id`, `username`, `display_name`
-               FROM `#__users`
+            "SELECT `id`, `user`, `name`
+               FROM `#__user`
               WHERE `id` IN ({$placeholders})",
             $ids
         )->rows;
@@ -280,7 +280,7 @@ final class FriendshipRepository
         }
 
         $target = $this->db->query(
-            "SELECT `id` FROM `#__users` WHERE `id` = ? AND `status` = 'active' LIMIT 1",
+            "SELECT `id` FROM `#__user` WHERE `id` = ? AND `status` = 'active' LIMIT 1",
             [$toUserId]
         )->row;
         if ($target === []) {

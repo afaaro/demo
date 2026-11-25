@@ -41,11 +41,11 @@ class ForumSearch extends Controller
                 "SELECT t.`id`, t.`title`, t.`last_post_at`, t.`post_count`, t.`view_count`,
                         t.`is_pinned`, t.`is_locked`,
                         c.`name` AS category_name, c.`slug` AS category_slug,
-                        COALESCE(NULLIF(u.`display_name`, ''), u.`username`) AS last_poster,
+                        COALESCE(NULLIF(u.`name`, ''), u.`user`) AS last_poster,
                         r.`last_read_at`
                    FROM `#__forum_threads` t
                    JOIN `#__forum_categories` c ON c.`id` = t.`category_id` AND c.`status` = 'visible'
-                   LEFT JOIN `#__users` u ON u.`id` = t.`last_post_by`
+                   LEFT JOIN `#__user` u ON u.`id` = t.`last_post_by`
                    LEFT JOIN `#__forum_reads` r ON r.`thread_id` = t.`id` AND r.`user_id` = ?
                   WHERE t.`is_deleted` = 0 AND {$acc['sql']}
                     AND (

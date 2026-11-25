@@ -128,9 +128,9 @@ final class NewsRevisionRepository
 
     private function selectSql(): string
     {
-        return "SELECT r.*, NULLIF(TRIM(COALESCE(NULLIF(u.`display_name`, ''), u.`username`)), '') AS author_name
+        return "SELECT r.*, NULLIF(TRIM(COALESCE(NULLIF(u.`name`, ''), u.`user`)), '') AS author_name
                   FROM `#__news_revisions` r
-                  LEFT JOIN `users` u ON u.`id` = r.`author_id`";
+                  LEFT JOIN `user` u ON u.`id` = r.`author_id`";
     }
 
     private function hasTable(): bool

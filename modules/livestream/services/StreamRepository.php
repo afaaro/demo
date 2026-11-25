@@ -120,7 +120,7 @@ final class StreamRepository
             return 0;
         }
         $row = $this->db->query(
-            'SELECT `id` FROM `#__users` WHERE `username` = ? LIMIT 1',
+            'SELECT `id` FROM `#__user` WHERE `user` = ? LIMIT 1',
             [$username]
         )->row;
         return is_array($row) ? (int) ($row['id'] ?? 0) : 0;
@@ -136,9 +136,9 @@ final class StreamRepository
         }
         return $this->db->query(
             "SELECT m.`user_id`, m.`created_at`,
-                    COALESCE(u.`username`, '') AS `username`
+                    COALESCE(u.`user`, '') AS `username`
                FROM `#__livestream_stream_members` m
-               LEFT JOIN `#__users` u ON u.`id` = m.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = m.`user_id`
               WHERE m.`stream_id` = ?
               ORDER BY m.`id` ASC",
             [$streamId]
@@ -217,9 +217,9 @@ final class StreamRepository
         $limit = max(1, min(100, $limit));
         return $this->db->query(
             "SELECT s.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__livestream_streams` s
-               LEFT JOIN `#__users` u ON u.`id` = s.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = s.`user_id`
               ORDER BY
                 CASE WHEN s.`status` = 'live' THEN 0 ELSE 1 END,
                 COALESCE(s.`started_at`, s.`created_at`) DESC
@@ -235,9 +235,9 @@ final class StreamRepository
         $limit = max(1, min(100, $limit));
         return $this->db->query(
             "SELECT s.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__livestream_streams` s
-               LEFT JOIN `#__users` u ON u.`id` = s.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = s.`user_id`
               WHERE s.`status` = 'live'
               ORDER BY s.`started_at` DESC
               LIMIT {$limit}"

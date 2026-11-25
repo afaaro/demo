@@ -31,9 +31,9 @@ final class CommentRepository
 
         return $this->db->query(
             "SELECT c.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__comments` c
-               LEFT JOIN `#__users` u ON u.`id` = c.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = c.`user_id`
               WHERE c.`module` = ?
                 AND c.`entity_type` = ?
                 AND c.`entity_id` = ?
@@ -59,9 +59,9 @@ final class CommentRepository
 
         return $this->db->query(
             "SELECT c.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__comments` c
-               LEFT JOIN `#__users` u ON u.`id` = c.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = c.`user_id`
               WHERE c.`status` = 'visible'
                 {$moduleSql}
               ORDER BY c.`created_at` DESC, c.`id` DESC
@@ -105,16 +105,16 @@ final class CommentRepository
         $total = (int) $this->db->query(
             "SELECT COUNT(*)
                FROM `#__comments` c
-               LEFT JOIN `#__users` u ON u.`id` = c.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = c.`user_id`
               WHERE {$sqlWhere}",
             $params
         )->value;
 
         $rows = $this->db->query(
             "SELECT c.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__comments` c
-               LEFT JOIN `#__users` u ON u.`id` = c.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = c.`user_id`
               WHERE {$sqlWhere}
               ORDER BY c.`created_at` DESC, c.`id` DESC
               LIMIT {$limit} OFFSET {$offset}",
@@ -173,9 +173,9 @@ final class CommentRepository
         }
         $row = $this->db->query(
             "SELECT c.*,
-                    COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS username
+                    COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS username
                FROM `#__comments` c
-               LEFT JOIN `#__users` u ON u.`id` = c.`user_id`
+               LEFT JOIN `#__user` u ON u.`id` = c.`user_id`
               WHERE c.`id` = ?
               LIMIT 1",
             [$id]
@@ -244,9 +244,9 @@ final class CommentRepository
             if ($module === 'community' && $entityType === 'post') {
                 $row = $this->db->query(
                     "SELECT p.`id`, p.`body`, p.`visibility`, p.`status`,
-                            COALESCE(NULLIF(u.`display_name`, ''), u.`username`, 'User') AS author_name
+                            COALESCE(NULLIF(u.`name`, ''), u.`user`, 'User') AS author_name
                        FROM `#__community_posts` p
-                       LEFT JOIN `#__users` u ON u.`id` = p.`user_id`
+                       LEFT JOIN `#__user` u ON u.`id` = p.`user_id`
                       WHERE p.`id` = ?
                       LIMIT 1",
                     [(int) $entityId]

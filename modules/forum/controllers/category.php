@@ -73,12 +73,12 @@ class ForumCategory extends Controller
 
         $threads = $this->db->query(
             "SELECT t.*,
-                    COALESCE(NULLIF(au.`display_name`, ''), au.`username`) AS author_name,
-                    COALESCE(NULLIF(lu.`display_name`, ''), lu.`username`) AS last_poster,
+                    COALESCE(NULLIF(au.`name`, ''), au.`user`) AS author_name,
+                    COALESCE(NULLIF(lu.`name`, ''), lu.`user`) AS last_poster,
                     r.`last_read_at`
                FROM `#__forum_threads` t
-               LEFT JOIN `#__users` au ON au.`id` = t.`user_id`
-               LEFT JOIN `#__users` lu ON lu.`id` = t.`last_post_by`
+               LEFT JOIN `#__user` au ON au.`id` = t.`user_id`
+               LEFT JOIN `#__user` lu ON lu.`id` = t.`last_post_by`
                LEFT JOIN `#__forum_reads` r ON r.`thread_id` = t.`id` AND r.`user_id` = ?
               WHERE {$where}
               ORDER BY t.`is_pinned` DESC, {$order}
